@@ -457,12 +457,6 @@ input:focus, select:focus {
   margin-top: 4px;
 }
 
-.monitor-store.pokecenter {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
-  border-color: rgba(239, 68, 68, 0.3);
-}
-
 .monitor-interval {
   font-size: 0.8rem;
   color: var(--text-muted);

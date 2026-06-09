@@ -30,6 +30,9 @@ app.post('/api/tasks', (req, res) => {
   if (!url || !store || !interval) {
     return res.status(400).json({ error: 'Brakujące parametry (url, store, interval)' });
   }
+  if (store !== 'rebel') {
+    return res.status(400).json({ error: 'Obsługiwany jest tylko sklep rebel' });
+  }
   const newTask = botManager.addTask(url, store, interval, quantity, profileId);
   res.status(201).json(newTask);
 });
@@ -185,7 +188,7 @@ app.post('/api/settings/test-webhook', async (req, res) => {
 // Otwórz sesję logowania w przeglądarce
 app.post('/api/sessions/:store/login', async (req, res) => {
   const store = req.params.store;
-  if (store !== 'rebel' && store !== 'pokecenter') {
+  if (store !== 'rebel') {
     return res.status(400).json({ error: 'Nieprawidłowy sklep' });
   }
   try {

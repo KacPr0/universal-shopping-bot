@@ -955,11 +955,7 @@ class BotManager {
     if (this.activeSessions.has(store)) {
       console.log(`Sesja dla ${store} jest już otwarta. Przełączanie karty na stronę logowania...`);
       const { page } = this.activeSessions.get(store);
-      let targetUrl = 'https://www.rebel.pl/security';
-      if (store === 'pokecenter') {
-        targetUrl = 'https://www.pokemoncenter.com';
-      }
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await page.goto('https://www.rebel.pl/security', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
       return;
     }
 
@@ -989,12 +985,7 @@ class BotManager {
       await context.close().catch(() => {});
     });
 
-    let targetUrl = 'https://www.rebel.pl/security';
-    if (store === 'pokecenter') {
-      targetUrl = 'https://www.pokemoncenter.com';
-    }
-    
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(err => {
+    await page.goto('https://www.rebel.pl/security', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(err => {
       console.error(`Błąd przechodzenia do URL logowania: ${err.message}`);
     });
     // Przeglądarka pozostanie otwarta, dopóki użytkownik jej nie zamknie.

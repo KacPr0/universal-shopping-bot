@@ -1,5 +1,5 @@
 /**
- * Wspólna logika dopasowywania produktów po słowach kluczowych (Rebel, Pokemon Center).
+ * Wspólna logika dopasowywania produktów po słowach kluczowych (Rebel).
  */
 function validateProductName(input, resolvedName) {
   const cleanString = (str) => {

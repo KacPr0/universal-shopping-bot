@@ -221,8 +221,8 @@ function renderTasks() {
     card.className = 'monitor-card';
     
     // Nazwa sklepu
-    const storeClass = task.store === 'pokecenter' ? 'monitor-store pokecenter' : 'monitor-store';
-    const storeLabel = task.store === 'pokecenter' ? 'Pokemon Center' : 'Rebel.pl';
+    const storeClass = 'monitor-store';
+    const storeLabel = 'Rebel.pl';
 
     // Badge statusu
     let statusClass = 'idle';

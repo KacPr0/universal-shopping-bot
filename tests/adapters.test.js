@@ -2,7 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const STORES = ['rebel', 'pokecenter'];
+const STORES = ['rebel'];
 
 describe('store adapters', () => {
   for (const store of STORES) {
