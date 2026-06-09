@@ -1,0 +1,23 @@
+node_modules/
+.DS_Store
+
+# Baza danych z prywatnymi danymi, profilami i statystykami
+db.json
+
+# Zmienne środowiskowe
+.env
+
+# Sesje przeglądarki (cookies, logowanie)
+.sessions/
+
+# Pliki logów
+logs/
+*.log
+
+# Tymczasowe zrzuty ekranu / pliki Playwrighta
+test-results/
+playwright-report/
+blob-report/
+
+# Build Electron
+dist/

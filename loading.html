@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inicjalizacja Universal Shopping Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0518;
+      --card-bg: rgba(18, 12, 38, 0.4);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --primary: #9d4edd;
+      --secondary: #3f37c9;
+      --text: #f3f0fc;
+      --text-muted: #a49fc6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Ambient background glow */
+    body::before {
+      content: '';
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(157, 78, 221, 0.2) 0%, rgba(63, 55, 201, 0.05) 70%, transparent 100%);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      filter: blur(40px);
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .loading-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 40px;
+      width: 480px;
+      text-align: center;
+      z-index: 2;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    }
+
+    .logo {
+      font-size: 3.5rem;
+      margin-bottom: 20px;
+      animation: pulse 2s infinite ease-in-out;
+      display: inline-block;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 10px;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #f3f0fc 0%, #a49fc6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    p {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+      line-height: 1.5;
+    }
+
+    .progress-container {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 25px;
+      position: relative;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--secondary) 0%, var(--primary) 100%);
+      width: 30%;
+      border-radius: 4px;
+      position: absolute;
+      animation: indeterminate 2s infinite ease-in-out;
+    }
+
+    .status-text {
+      font-size: 0.85rem;
+      color: var(--primary);
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .info-badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 50px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.1); opacity: 1; }
+      100% { transform: scale(1); opacity: 0.8; }
+    }
+
+    @keyframes indeterminate {
+      0% { left: -35%; right: 100%; }
+      50% { left: 100%; right: -35%; }
+      100% { left: -35%; right: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-card">
+    <div class="logo">🤖</div>
+    <h1 id="main-title">Inicjalizacja Bota...</h1>
+    <div class="status-text" id="status-label">Sprawdzanie środowiska</div>
+    
+    <div class="progress-container">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    
+    <p id="details-text">Weryfikacja instalacji przeglądarki Playwright w systemie. Proszę czekać...</p>
+    <div class="info-badge">Konfiguracja jednorazowa</div>
+  </div>
+
+  <script>
+    // Proces Electron wyśle aktualizacje statusów za pomocą interfejsu IPC
+    const { ipcRenderer } = require('electron');
+    
+    ipcRenderer.on('status-update', (event, data) => {
+      if (data.title) document.getElementById('main-title').innerText = data.title;
+      if (data.status) document.getElementById('status-label').innerText = data.status;
+      if (data.details) document.getElementById('details-text').innerText = data.details;
+      
+      // Jeśli skończyliśmy, możemy zatrzymać animację bar
+      if (data.done) {
+        const bar = document.getElementById('progress-bar');
+        bar.style.animation = 'none';
+        bar.style.width = '100%';
+        bar.style.left = '0';
+      }
+    });
+  </script>
+</body>
+</html>
