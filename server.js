@@ -128,6 +128,10 @@ app.get('/api/stats', (req, res) => {
   res.json(botManager.getStats());
 });
 
+app.post('/api/stats/clear', (req, res) => {
+  res.json(botManager.clearStats());
+});
+
 // Pobierz ustawienia
 app.get('/api/settings', (req, res) => {
   res.json(botManager.getSettings());
@@ -139,10 +143,19 @@ app.post('/api/settings', (req, res) => {
   res.json({ success: true });
 });
 
+const DEV_MODE_PASSWORD = process.env.DEV_MODE_PASSWORD || 'zaq12wsx';
+
 // Zapisz stan Dev Mode (odblokowany/zablokowany)
 app.post('/api/settings/dev-mode', (req, res) => {
-  const { unlocked } = req.body;
-  botManager.settings.devModeUnlocked = unlocked === true;
+  const { unlocked, password } = req.body;
+  if (unlocked === true) {
+    if (password !== DEV_MODE_PASSWORD) {
+      return res.status(403).json({ error: 'Błędne hasło deweloperskie.' });
+    }
+    botManager.settings.devModeUnlocked = true;
+  } else {
+    botManager.settings.devModeUnlocked = false;
+  }
   botManager.saveDb();
   res.json({ success: true });
 });
@@ -159,7 +172,7 @@ app.post('/api/settings/test-webhook', async (req, res) => {
   botManager.settings.discordWebhookUrl = webhookUrl;
   
   try {
-    await botManager.sendDiscordWebhook('🤖 **Universal Shopping Bot**: Test powiadomienia zakończony sukcesem!');
+    await botManager.sendDiscordWebhook('**Universal Shopping Bot**: Test powiadomienia zakończony sukcesem.');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -209,7 +222,7 @@ wss.on('connection', (socket) => {
 server.listen(PORT, () => {
   console.log(`====================================================`);
   console.log(`  Universal Shopping Bot Dashboard działa pod adresem:`);
-  console.log(`  👉 http://localhost:${PORT}`);
+  console.log(`  http://localhost:${PORT}`);
   console.log(`====================================================`);
 });
 

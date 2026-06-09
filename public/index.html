@@ -4,24 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Universal Shopping Bot | Control Panel</title>
+  <link rel="icon" type="image/png" href="favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=3.1">
+  <link rel="stylesheet" href="style.css?v=3.2">
 </head>
 <body>
   <div class="glass-bg"></div>
   
   <header>
     <div class="logo-area">
-      <div class="logo-icon" style="display: flex; align-items: center; justify-content: center;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.5));">
-          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-          <line x1="8" y1="21" x2="16" y2="21"></line>
-          <line x1="12" y1="17" x2="12" y2="21"></line>
-          <path d="M12 7v5"></path>
-          <path d="m9 10 3 3 3-3"></path>
-        </svg>
+      <div class="logo-icon">
+        <img src="favicon.png" alt="" class="logo-icon-img" width="44" height="44">
       </div>
       <div class="logo-text">
         <h1>Universal Shopping Bot</h1>
@@ -215,6 +210,37 @@
             </div>
 
 
+            <!-- SEKCJA: CLUSTERING / WYDAJNOŚĆ -->
+            <div class="accordion-item">
+              <div class="accordion-header">
+                <div class="accordion-header-title">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="accordion-icon"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                  <span>Clustering (wiele monitorów)</span>
+                </div>
+                <svg class="chevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+              <div class="accordion-content">
+                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.4;">
+                  Kontroluje równoległe sprawdzanie dostępności i checkout przy wielu aktywnych monitorach (np. podczas dropów).
+                </p>
+                <div class="form-grid">
+                  <div class="form-group">
+                    <label for="set-cluster-browsers">Max przeglądarek (checki)</label>
+                    <input type="number" id="set-cluster-browsers" min="1" max="6" value="2">
+                  </div>
+                  <div class="form-group">
+                    <label for="set-cluster-checks">Max równoległych checków</label>
+                    <input type="number" id="set-cluster-checks" min="1" max="12" value="4">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="set-cluster-checkouts">Max równoległych checkoutów</label>
+                  <input type="number" id="set-cluster-checkouts" min="1" max="3" value="1">
+                </div>
+                <p id="cluster-stats-line" style="font-size: 0.78rem; color: var(--text-muted); margin-top: 8px;">Klastr: —</p>
+              </div>
+            </div>
+
             <!-- SEKCJA: PROFILE ZAKUPOWE -->
             <div class="accordion-item">
               <div class="accordion-header">
@@ -303,12 +329,16 @@
 
       <!-- STATS DASHBOARD (Dev Mode) -->
       <div class="card glass-card" id="stats-panel" style="display: none;">
-        <h2>Statystyki</h2>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;">
+          <h2 style="margin: 0;">Statystyki</h2>
+          <button type="button" class="btn btn-secondary btn-small btn-danger" id="btn-clear-stats">Wyczyść statystyki</button>
+        </div>
         <div class="stats-grid" id="stats-grid">
           <!-- Rendered by JS -->
         </div>
         <div class="stats-chart-container">
           <h3>Czasy checkoutu</h3>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0 0 8px;">Słupki = całkowity czas jak w logu ([BENCHMARK] CAŁKOWITY CZAS CHECKOUTU)</p>
           <canvas id="checkout-chart" width="700" height="250"></canvas>
         </div>
         <div class="stats-availability">
@@ -320,11 +350,25 @@
     </section>
   </main>
 
+  <!-- Modal (Electron nie obsługuje window.prompt/confirm) -->
+  <div id="app-dialog" class="app-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+    <div class="app-dialog__backdrop" id="app-dialog-backdrop"></div>
+    <div class="app-dialog__card glass-card">
+      <h3 id="app-dialog-title" class="app-dialog__title"></h3>
+      <p id="app-dialog-message" class="app-dialog__message"></p>
+      <input type="password" id="app-dialog-input" class="app-dialog__input hidden" autocomplete="off" />
+      <div class="app-dialog__actions">
+        <button type="button" id="app-dialog-cancel" class="btn btn-secondary btn-small">Anuluj</button>
+        <button type="button" id="app-dialog-ok" class="btn btn-primary btn-small">OK</button>
+      </div>
+    </div>
+  </div>
+
   <!-- STOPKA -->
   <footer>
     <p>Universal Shopping Bot &copy; 2026. Stworzono lokalnie. Bezpieczeństwo kluczy i danych zapewnione lokalnym szyfrowaniem.</p>
   </footer>
 
-  <script src="app.js?v=3.0"></script>
+  <script src="app.js?v=3.1"></script>
 </body>
 </html>

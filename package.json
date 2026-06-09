@@ -6,9 +6,12 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test tests/**/*.test.js",
     "dev": "node server.js",
     "electron:start": "electron .",
     "electron:build": "electron-builder",
+    "electron:build:mac": "electron-builder --mac",
+    "electron:build:win": "electron-builder --win --x64",
     "electron:build-dir": "electron-builder --dir"
   },
   "dependencies": {
@@ -28,23 +31,48 @@
   "build": {
     "appId": "com.kacper.universal-shopping-bot",
     "productName": "Universal Shopping Bot",
+    "icon": "build/icon.png",
     "directories": {
       "output": "dist"
     },
     "files": [
-      "**/*",
-      "!dist/**/*",
-      "!.sessions/**/*",
-      "!inspect-*.js",
-      "!test-*.js",
-      "!security-page.html",
-      "!cart-modal.html"
+      "main.js",
+      "server.js",
+      "botManager.js",
+      "loading.html",
+      "build/icon.png",
+      "lib/**/*",
+      "sites/**/*",
+      "public/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/playwright/**/*",
+      "node_modules/playwright-core/**/*"
     ],
     "mac": {
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "gatekeeperAssess": false,
+      "hardenedRuntime": false
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

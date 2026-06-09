@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Inicjalizacja Universal Shopping Bot</title>
+  <link rel="icon" type="image/png" href="build/icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
@@ -65,10 +66,17 @@
     }
 
     .logo {
-      font-size: 3.5rem;
       margin-bottom: 20px;
       animation: pulse 2s infinite ease-in-out;
       display: inline-block;
+    }
+
+    .logo img {
+      width: 72px;
+      height: 72px;
+      border-radius: 14px;
+      object-fit: cover;
+      display: block;
     }
 
     h1 {
@@ -142,7 +150,7 @@
 </head>
 <body>
   <div class="loading-card">
-    <div class="logo">🤖</div>
+    <div class="logo"><img src="build/icon.png" alt="Universal Shopping Bot"></div>
     <h1 id="main-title">Inicjalizacja Bota...</h1>
     <div class="status-text" id="status-label">Sprawdzanie środowiska</div>
     

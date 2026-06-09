@@ -1,5 +1,9 @@
 node_modules/
 .DS_Store
+.cursor/
+
+# Lokalna lista zadań (nie commituj)
+TODO.md
 
 # Baza danych z prywatnymi danymi, profilami i statystykami
 db.json
@@ -10,8 +14,9 @@ db.json
 # Sesje przeglądarki (cookies, logowanie)
 .sessions/
 
-# Pliki logów
+# Pliki logów i zrzuty błędów checkoutu
 logs/
+logs/checkout-errors/
 *.log
 
 # Tymczasowe zrzuty ekranu / pliki Playwrighta
@@ -19,5 +24,13 @@ test-results/
 playwright-report/
 blob-report/
 
-# Build Electron
+# Build Electron (instalatory — generuj lokalnie: npm run electron:build)
 dist/
+
+# Lokalne skrypty debugowania i zrzuty HTML ze stron sklepów
+inspect-*.js
+test-search.js
+cart-page.html
+rebel-search.html
+
+TODO.md

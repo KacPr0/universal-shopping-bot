@@ -11,11 +11,13 @@ let mainWindow;
 let serverInstance;
 
 const PORT = process.env.PORT || 3000;
+const APP_ICON = path.join(__dirname, 'build', 'icon.png');
 
 function createLoadingWindow() {
   loadingWindow = new BrowserWindow({
     width: 550,
     height: 400,
+    icon: APP_ICON,
     frame: false, // brak systemowej ramki okna
     transparent: true, // przezroczyste tło modalu
     alwaysOnTop: true,
@@ -37,6 +39,7 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    icon: APP_ICON,
     title: 'Universal Shopping Bot Console',
     show: false, // pokażemy dopiero po załadowaniu URL
     webPreferences: {
@@ -155,6 +158,8 @@ function startExpressServer() {
 }
 
 app.on('ready', async () => {
+  process.env.BOT_DATA_DIR = app.getPath('userData');
+
   createLoadingWindow();
   
   // Dajmy oknu ładowania 1s na wyrenderowanie HTML

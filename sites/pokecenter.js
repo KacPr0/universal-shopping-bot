@@ -2,30 +2,7 @@
  * Adapter dla sklepu Pokemon Center (pokemoncenter.com)
  */
 
-/**
- * Funkcja weryfikująca, czy nazwa znalezionego produktu pasuje do zapytania użytkownika.
- */
-function validateProductName(input, resolvedName) {
-  const cleanString = (str) => {
-    return str
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // usuwanie znaków diakrytycznych
-      .replace(/[^a-z0-9\s]/g, " ")     // zamiana interpunkcji na spacje
-      .split(/\s+/)
-      .filter(w => w.length > 0);
-  };
-
-  const inputWords = cleanString(input);
-  const nameWords = cleanString(resolvedName);
-
-  // Interesują nas tylko słowa kluczowe o długości > 1
-  const criticalWords = inputWords.filter(w => w.length > 1);
-  if (criticalWords.length === 0) return true;
-
-  // Wszystkie krytyczne słowa kluczowe muszą wystąpić w nazwie produktu
-  return criticalWords.every(word => nameWords.some(nameWord => nameWord.includes(word) || word.includes(nameWord)));
-}
+const { validateProductName } = require('./lib/productSearch');
 
 /**
  * Rozpoznaje czy wejście to URL czy fraza do wyszukiwania. Jeśli fraza, wyszukuje produkt i zwraca jego URL.
@@ -113,7 +90,7 @@ async function checkAvailability(page, urlOrQuery, log) {
   try {
     resolvedUrl = await resolveProductUrl(page, urlOrQuery, log);
   } catch (err) {
-    log(`❌ Błąd wyszukiwania: ${err.message}`);
+    log(`[BŁĄD] Błąd wyszukiwania: ${err.message}`);
     return { available: false, resolvedUrl: null };
   }
 

@@ -2,72 +2,39 @@
  * Adapter dla sklepu Rebel.pl
  */
 
-// Stała: selektory przycisków przejścia do kasy (używane w wielu miejscach)
-const CHECKOUT_BTN_SELECTORS = [
-  'a:has-text("DALEJ")',
-  'button:has-text("DALEJ")',
-  'a:has-text("Dalej")',
-  'button:has-text("Dalej")',
-  'a:has-text("Przejdź do kasy")',
-  'button:has-text("Przejdź do kasy")',
-  'a:has-text("Zamawiam")',
-  'button:has-text("Zamawiam")',
-  '.checkout-button',
-  'a[href*="/checkout"]'
-];
+const SELECTORS = require('./rebel-selectors');
+const { validateProductName } = require('./lib/productSearch');
+const {
+  extractProductId,
+  clearCartViaApi,
+  addToCartViaApi,
+  installInPostHooks,
+  selectInPostPaczkomatFast
+} = require('./rebel-api');
+
+const CHECKOUT_BTN_SELECTORS = SELECTORS.checkoutButtons;
 
 /**
  * Loguje użytkownika automatycznie, jeśli pojawi się formularz logowania (strona lub modal).
  */
+/** @returns {number} Czas logowania w sekundach (0 jeśli logowanie nie było potrzebne). */
 async function handleLoginIfRequired(page, details, log) {
   const email = details.rebelLoginEmail;
   const password = details.rebelPassword;
+  let loginElapsed = 0;
 
-  // Selektory dla loginu/emaila w kolejności priorytetu
-  const loginSelectors = [
-    '#login_login',
-    'input[name="login[login]"]',
-    'input[placeholder="Twój login albo adres e-mail"]',
-    'input[placeholder*="login"]',
-    'input[placeholder*="e-mail"]',
-    'input[name*="username"]',
-    'input[name*="login"]'
-  ];
+  const loginSelectors = SELECTORS.login.email;
+  const passwordSelectors = SELECTORS.login.password;
+  const submitSelectors = SELECTORS.login.submit;
 
   const loginUrl = page.url();
   const waitTimeout = (loginUrl.includes('/security') || loginUrl.includes('/login')) ? 5000 : 500;
   
-  // Czekamy na pojawienie się WIDOCZNEGO pola logowania
   try {
-    await page.locator('#login_login:visible, input[placeholder="Twój login albo adres e-mail"]:visible').first().waitFor({ state: 'visible', timeout: waitTimeout });
+    await page.locator(SELECTORS.login.visibleWait).first().waitFor({ state: 'visible', timeout: waitTimeout });
   } catch (e) {
     // Brak formularza logowania - nie jest wymagany w tym kroku
   }
-
-  // Selektory dla hasła w kolejności priorytetu
-  const passwordSelectors = [
-    '#login_password',
-    'input[name="login[password]"]',
-    'input[type="password"]'
-  ];
-
-  // Selektory dla przycisku Zaloguj
-  const submitSelectors = [
-    '#login_submit',
-    'button:has-text("ZALOGUJ")',
-    'button:has-text("Zaloguj")',
-    'input[type="submit"][value="ZALOGUJ"]',
-    'button[type="submit"]',
-    '#send2'
-  ];
-
-  const rememberSelectors = [
-    '#login_remember',
-    'input[name="login[remember]"]',
-    'input[name="remember_me"]',
-    'input#remember_me',
-    'input[type="checkbox"]'
-  ];
 
   let loginInput = null;
   for (const sel of loginSelectors) {
@@ -103,10 +70,10 @@ async function handleLoginIfRequired(page, details, log) {
     }
 
     if (passwordInput) {
-      log('🔑 Wykryto widoczny formularz logowania do Rebel.pl.');
+      log('Wykryto widoczny formularz logowania do Rebel.pl.');
       if (!email || !password) {
         const errorMsg = 'Logowanie jest wymagane, ale dane logowania (e-mail/hasło) dla Rebel.pl nie zostały skonfigurowane w panelu Ustawień!';
-        log(`❌ ${errorMsg}`);
+        log(`[BŁĄD] ${errorMsg}`);
         throw new Error(errorMsg);
       }
       
@@ -135,7 +102,7 @@ async function handleLoginIfRequired(page, details, log) {
 
       // "Zapamiętaj mnie" - szybkie zaznaczenie bez pętli
       try {
-        const rememberChk = page.locator('#login_remember:visible, input[name*="remember"]:visible').first();
+        const rememberChk = page.locator(SELECTORS.login.rememberQuick).first();
         if (await rememberChk.isVisible().catch(() => false)) {
           await rememberChk.check().catch(() => {});
         }
@@ -174,7 +141,7 @@ async function handleLoginIfRequired(page, details, log) {
 
       if (!clickedSubmit) {
         const errorMsg = 'Nie udało się kliknąć przycisku logowania (brak przycisku lub zablokowany).';
-        log(`❌ ${errorMsg}`);
+        log(`[BŁĄD] ${errorMsg}`);
         throw new Error(errorMsg);
       }
 
@@ -190,40 +157,17 @@ async function handleLoginIfRequired(page, details, log) {
         } catch (e) {}
         
         const errorMsg = `Logowanie nie powiodło się (formularz nadal widoczny). ${errorText ? 'Błąd: ' + errorText.trim() : ''}`;
-        log(`❌ ${errorMsg}`);
+        log(`[BŁĄD] ${errorMsg}`);
         throw new Error(errorMsg);
       } else {
-        log('🎉 Logowanie do Rebel.pl zakończone sukcesem!');
-        const loginElapsed = ((Date.now() - tLoginStart) / 1000);
-        log(`⏱️ [BENCHMARK] Automatyczne logowanie: ${loginElapsed.toFixed(2)}s`);
+        log('Logowanie do Rebel.pl zakończone sukcesem.');
+        loginElapsed = (Date.now() - tLoginStart) / 1000;
+        log(`[BENCHMARK] Automatyczne logowanie: ${loginElapsed.toFixed(2)}s`);
       }
     }
   }
-}
 
-/**
- * Funkcja weryfikująca, czy nazwa znalezionego produktu pasuje do zapytania użytkownika.
- */
-function validateProductName(input, resolvedName) {
-  const cleanString = (str) => {
-    return str
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // usuwanie znaków diakrytycznych
-      .replace(/[^a-z0-9\s]/g, " ")     // zamiana interpunkcji na spacje
-      .split(/\s+/)
-      .filter(w => w.length > 0);
-  };
-
-  const inputWords = cleanString(input);
-  const nameWords = cleanString(resolvedName);
-
-  // Interesują nas tylko słowa kluczowe o długości > 1 (pomijamy spójniki typu "a", "i", "w")
-  const criticalWords = inputWords.filter(w => w.length > 1);
-  if (criticalWords.length === 0) return true;
-
-  // Wszystkie krytyczne słowa kluczowe muszą wystąpić w nazwie produktu
-  return criticalWords.every(word => nameWords.some(nameWord => nameWord.includes(word) || word.includes(nameWord)));
+  return loginElapsed;
 }
 
 /**
@@ -290,9 +234,9 @@ async function checkAvailability(page, inputUrl, log) {
     const searchUrl = `https://www.rebel.pl/szukaj?q=${encodeURIComponent(searchQuery)}`;
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     
-    await page.waitForSelector('.product-box, .product, a[href$=".html"]', { timeout: 10000 }).catch(() => {});
+    await page.waitForSelector(SELECTORS.availability.searchResults, { timeout: 10000 }).catch(() => {});
     
-    const items = await page.locator('.product-box, main a[href$=".html"]').all();
+    const items = await page.locator(SELECTORS.availability.searchItems).all();
     log(`Analiza elementów w wynikach wyszukiwania...`);
 
     for (const item of items) {
@@ -341,8 +285,8 @@ async function checkAvailability(page, inputUrl, log) {
   await page.goto(resolvedUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   // Warp Mode: Czekamy na pojawienie się przycisku "Dodaj do koszyka" lub info o niedostępności zamiast sztywnych 2s
   await Promise.race([
-    page.locator('button:has-text("dodaj do koszyka"), button:has-text("Dodaj do koszyka"), .add-to-cart-button').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
-    page.locator('text=Produkt tymczasowo niedostępny').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+    page.locator(SELECTORS.availability.productWait).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
+    page.locator(SELECTORS.availability.unavailableText).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   ]);
 
   let productName = 'Nieznany produkt';
@@ -355,7 +299,7 @@ async function checkAvailability(page, inputUrl, log) {
 
   let price = 'Nieznana cena';
   try {
-    const priceElement = page.locator('.price, .product-price, [itemprop="price"]').first();
+    const priceElement = page.locator(SELECTORS.availability.price).first();
     if (await priceElement.isVisible()) {
       price = await priceElement.innerText();
       price = price.trim();
@@ -364,17 +308,8 @@ async function checkAvailability(page, inputUrl, log) {
     log(`Nie udało się odczytać ceny: ${err.message}`);
   }
 
-  // Sprawdzamy przycisk "Dodaj do koszyka"
-  const buyButtons = [
-    'button:has-text("dodaj do koszyka")',
-    'button:has-text("Dodaj do koszyka")',
-    '.add-to-cart-button',
-    'button.add-to-cart',
-    '#add-to-cart'
-  ];
-
   let isAvailable = false;
-  for (const selector of buyButtons) {
+  for (const selector of SELECTORS.availability.addToCart) {
     try {
       const button = page.locator(selector).first();
       if (await button.isVisible() && await button.isEnabled()) {
@@ -386,7 +321,7 @@ async function checkAvailability(page, inputUrl, log) {
 
   if (isAvailable) {
     const pageText = await page.innerText('body');
-    if (pageText.includes('Produkt tymczasowo niedostępny') || pageText.includes('Chwilowy brak towaru')) {
+    if (SELECTORS.availability.outOfStockPhrases.some(phrase => pageText.includes(phrase))) {
       log('Wykryto informację o braku dostępności produktu.');
       isAvailable = false;
     }
@@ -405,6 +340,7 @@ async function checkAvailability(page, inputUrl, log) {
  */
 async function checkout(page, url, details, log) {
   log(`Rozpoczynanie checkoutu dla: ${url}`);
+  await installInPostHooks(page);
   const tStart = Date.now();
   let tStepStart = Date.now();
 
@@ -424,84 +360,106 @@ async function checkout(page, url, details, log) {
 
   if (!onCheckout && !onCart) {
     const tProductStart = Date.now();
+    const productId = extractProductId(url);
+    let addedViaApi = false;
+
     await page.goto(url, { waitUntil: 'commit' });
 
-    // Czyszczenie koszyka z poprzednich produktów (zapobiega nieoczekiwanym kosztom)
-    try {
-      const cartBadge = page.locator('.toolbar__cart .badge').first();
-      const badgeText = await cartBadge.innerText().catch(() => '0');
-      if (parseInt(badgeText) > 0) {
-        log(`[Koszyk] Wykryto ${badgeText} produkt(ów) w koszyku z poprzedniego runu. Czyszczenie...`);
-        await page.goto('https://www.rebel.pl/shopping/cart', { waitUntil: 'domcontentloaded' });
-        const removeButtons = page.locator('.cart--remove a, .cart--remove button, a[title="Usuń"], button[title="Usuń"]');
-        let removeCount = await removeButtons.count();
-        // Zabezpieczenie przed nieskończoną pętlą
-        if (removeCount > 10) removeCount = 10;
-        for (let i = 0; i < removeCount; i++) {
-          await removeButtons.first().click().catch(() => {});
-          // Bardzo szybkie oczekiwanie na przeładowanie koszyka zamiast networkidle
-          await page.waitForResponse(res => res.url().includes('/cart') && res.status() === 200, { timeout: 1000 }).catch(async () => await page.waitForTimeout(250));
-        }
-        log(`[Koszyk] Koszyk wyczyszczony. Wracam na stronę produktu...`);
-        await page.goto(url, { waitUntil: 'domcontentloaded' });
-      }
-    } catch (e) {
-      // Ignorujemy błędy czyszczenia koszyka
+    if (productId) {
+      await clearCartViaApi(page, log).catch(() => {});
+      addedViaApi = await addToCartViaApi(page, productId, details.quantity || 1, log);
     }
 
-    log(`Klikanie przycisku "Dodaj do koszyka"...`);
-    const buyBtnSelectors = [
-      'button:has-text("dodaj do koszyka")',
-      'button:has-text("Dodaj do koszyka")',
-      '.add-to-cart-button',
-      'button.add-to-cart'
-    ];
-
-    let clicked = false;
-    for (const sel of buyBtnSelectors) {
+    if (!addedViaApi) {
       try {
-        const btn = page.locator(sel).first();
-        // Ponieważ używamy waitUntil: 'commit', musimy chwilę poczekać aż element pojawi się w DOM
-        await btn.waitFor({ state: 'attached', timeout: 1500 }).catch(() => {});
-        if (await btn.isVisible()) {
-          await btn.click({ force: true });
-          clicked = true;
-          break;
+        const cartBadge = page.locator('.toolbar__cart .badge').first();
+        const badgeText = await cartBadge.innerText().catch(() => '0');
+        if (parseInt(badgeText, 10) > 0) {
+          log(`[Koszyk] Wykryto ${badgeText} produkt(ów) w koszyku z poprzedniego runu. Czyszczenie...`);
+          await clearCartViaApi(page, log).catch(async () => {
+            await page.goto('https://www.rebel.pl/shopping/cart', { waitUntil: 'domcontentloaded' });
+            const removeButtons = page.locator('.cart--remove a, .cart--remove button, a[title="Usuń"], button[title="Usuń"]');
+            let removeCount = await removeButtons.count();
+            if (removeCount > 10) removeCount = 10;
+            for (let i = 0; i < removeCount; i++) {
+              await removeButtons.first().click().catch(() => {});
+              await page.waitForResponse(res => res.url().includes('/cart') && res.status() === 200, { timeout: 1000 }).catch(() => {});
+            }
+            await page.goto(url, { waitUntil: 'domcontentloaded' });
+          });
         }
       } catch (e) {}
+
+      log('Klikanie przycisku "Dodaj do koszyka"...');
+      const buyBtnSelectors = [
+        'button:has-text("dodaj do koszyka")',
+        'button:has-text("Dodaj do koszyka")',
+        '.add-to-cart-button',
+        'button.add-to-cart'
+      ];
+
+      let clicked = false;
+      for (const sel of buyBtnSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          await btn.waitFor({ state: 'attached', timeout: 1500 }).catch(() => {});
+          if (await btn.isVisible()) {
+            await btn.click({ force: true });
+            clicked = true;
+            break;
+          }
+        } catch (e) {}
+      }
+
+      if (!clicked) {
+        return { success: false, error: 'Nie znaleziono przycisku "Dodaj do koszyka".' };
+      }
+
+      await Promise.race([
+        page.waitForResponse(response => response.url().includes('/cart/'), { timeout: 1200 }).catch(() => {}),
+        page.locator('.toolbar__cart .badge').evaluate(el => new Promise(resolve => {
+          if (el.textContent.trim() !== '0') return resolve();
+          const obs = new MutationObserver(() => {
+            if (el.textContent.trim() !== '0') { obs.disconnect(); resolve(); }
+          });
+          obs.observe(el, { childList: true, characterData: true, subtree: true });
+          setTimeout(resolve, 1200);
+        })).catch(() => {})
+      ]);
     }
 
-    if (!clicked) {
-      return { success: false, error: 'Nie znaleziono przycisku "Dodaj do koszyka".' };
-    }
-
-    // Warp Mode: Czekamy krótko aż licznik koszyka zasygnalizuje dodanie przed zmianą URL
-    await Promise.race([
-      page.waitForResponse(response => response.url().includes('/cart/'), { timeout: 1200 }).catch(() => {}),
-      page.locator('.toolbar__cart .badge').evaluate(el => new Promise(resolve => {
-        if (el.textContent.trim() !== '0') return resolve();
-        const obs = new MutationObserver(() => {
-          if (el.textContent.trim() !== '0') { obs.disconnect(); resolve(); }
-        });
-        obs.observe(el, { childList: true, characterData: true, subtree: true });
-        setTimeout(resolve, 1200);
-      })).catch(() => {})
-    ]);
-    log(`⏱️ [BENCHMARK] Załadowanie produktu i dodanie do koszyka: ${((Date.now() - tProductStart) / 1000).toFixed(2)}s`);
+    log(`[BENCHMARK] ${addedViaApi ? 'API' : 'DOM'} add-to-cart: ${((Date.now() - tProductStart) / 1000).toFixed(2)}s`);
     addToCartTime = (Date.now() - tProductStart) / 1000;
 
     const tCartStart = Date.now();
-    
-    // Optymalizacja: Pominięcie koszyka (Fast-track do kasy), chyba że użytkownik zamawia więcej niż 1 sztukę
-    if (details.quantity && details.quantity > 1) {
+
+    if (addedViaApi) {
+      log('Skrót API: bezpośrednio do kasy (pomijanie koszyka)...');
+      await page.goto('https://www.rebel.pl/shopping/checkout', { waitUntil: 'domcontentloaded' });
+
+      const postGotoResult = await Promise.race([
+        page.locator('#deliveryMethodContent').waitFor({ state: 'attached', timeout: 8000 }).then(() => 'checkout').catch(() => null),
+        page.locator('#login_login').waitFor({ state: 'attached', timeout: 8000 }).then(() => 'login').catch(() => null),
+        page.waitForURL('**/security**', { timeout: 8000 }).then(() => 'login-page').catch(() => null)
+      ]);
+
+      cartLoadTime = (Date.now() - tCartStart) / 1000;
+
+      if (postGotoResult === 'checkout' || page.url().includes('/shopping/checkout')) {
+        const loginVisible = await page.locator('#login_login').isVisible().catch(() => false);
+        if (!loginVisible) {
+          onCheckout = true;
+        }
+      }
+    } else if (details.quantity && details.quantity > 1) {
       log(`Przechodzenie na stronę koszyka (wymagana zmiana ilości na ${details.quantity})...`);
       await page.goto('https://www.rebel.pl/shopping/cart', { waitUntil: 'domcontentloaded' });
       await page.locator('#checkout-shopping-cart, .shopping-cart__list').first().waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
-      log(`⏱️ [BENCHMARK] Przejście do koszyka i załadowanie strony: ${((Date.now() - tCartStart) / 1000).toFixed(2)}s`);
+      log(`[BENCHMARK] Przejście do koszyka i załadowanie strony: ${((Date.now() - tCartStart) / 1000).toFixed(2)}s`);
       cartLoadTime = (Date.now() - tCartStart) / 1000;
       onCart = true;
       
-      await handleLoginIfRequired(page, details, log);
+      loginTime = await handleLoginIfRequired(page, details, log);
 
       const tCheckoutGotoStart = Date.now();
       log(`Przechodzenie do kasy...`);
@@ -533,7 +491,7 @@ async function checkout(page, url, details, log) {
       }
     } else {
       // FAST TRACK: Bezpośrednio do checkout
-      log(`⚡ Skrót! Przechodzenie bezpośrednio do kasy (pomijanie koszyka)...`);
+      log('Skrót: przechodzenie bezpośrednio do kasy (pomijanie koszyka)...');
       await page.goto('https://www.rebel.pl/shopping/checkout', { waitUntil: 'domcontentloaded' });
       
       // Czekamy deterministycznie: albo załaduje się kasa, albo formularz logowania (przekierowanie)
@@ -557,7 +515,7 @@ async function checkout(page, url, details, log) {
 
   // Weryfikacja logowania (jeśli po kliknięciu "DALEJ" wyskoczył modal na koszyku lub przekierowało na /security)
   if (!onCheckout) {
-    await handleLoginIfRequired(page, details, log);
+    loginTime = await handleLoginIfRequired(page, details, log);
   }
 
   // Sprawdzamy, czy wciąż jesteśmy na stronie koszyka (np. po zalogowaniu w modalu nie przeszło automatycznie dalej)
@@ -597,7 +555,7 @@ async function checkout(page, url, details, log) {
           // Weryfikacja: odczytujemy wartość ponownie
           const updatedQty = await qtyInput.inputValue().catch(() => '?');
           log(`[Koszyk] Ilość po aktualizacji: ${updatedQty}`);
-          log(`⏱️ [BENCHMARK] Zmiana ilości sztuk w koszyku: ${((Date.now() - tQtyStart) / 1000).toFixed(2)}s`);
+          log(`[BENCHMARK] Zmiana ilości sztuk w koszyku: ${((Date.now() - tQtyStart) / 1000).toFixed(2)}s`);
         } else {
           log(`[Koszyk] Ilość już prawidłowa (${currentQty}), pomijam zmianę.`);
         }
@@ -613,7 +571,7 @@ async function checkout(page, url, details, log) {
           }
           log(`[Koszyk] Pomyślnie zwiększono ilość o ${details.quantity - 1} za pomocą przycisku "+".`);
           await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
-          log(`⏱️ [BENCHMARK] Zmiana ilości sztuk w koszyku (kliknięcie "+"): ${((Date.now() - tQtyStart) / 1000).toFixed(2)}s`);
+          log(`[BENCHMARK] Zmiana ilości sztuk w koszyku (kliknięcie "+"): ${((Date.now() - tQtyStart) / 1000).toFixed(2)}s`);
         } catch (err) {
           log(`[Koszyk] Błąd podczas alternatywnego klikania "+": ${err.message}`);
         }
@@ -644,6 +602,9 @@ async function checkout(page, url, details, log) {
     return { success: false, error: 'Bot utknął na stronie logowania. Logowanie nie powiodło się lub brak danych.' };
   }
 
+  // Od tego momentu mierzymy tylko przygotowanie formularza kasy (bez nawigacji/koszyka)
+  tStepStart = Date.now();
+
   // Usuwamy baner cookie Didomi jeśli istnieje, aby nie zasłaniał elementów
   try {
     log('Czyszczenie banerów nakładkowych/cookie...');
@@ -660,7 +621,7 @@ async function checkout(page, url, details, log) {
     log(`Ostrzeżenie przy usuwaniu banera cookie: ${e.message}`);
   }
 
-  log(`⏱️ [BENCHMARK] Przygotowanie koszyka i logowanie: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
+  log(`[BENCHMARK] Przygotowanie koszyka i logowanie: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
   cartPrepTime = (Date.now() - tStepStart) / 1000;
   tStepStart = Date.now();
 
@@ -703,55 +664,25 @@ async function checkout(page, url, details, log) {
   await fillField(['input[name="email"]', 'input[type="email"]', '#customer-email'], details.email);
 
   let selectedInpost = false;
+  let inpostFastPath = false;
 
-  // Ustalenie metody wysyłki: preferujemy details.deliveryMethod, a jeśli brak, wnioskujemy na podstawie details.paczkomat
   const deliveryMethod = details.deliveryMethod || (details.paczkomat ? 'inpost' : 'dhl');
 
   if (deliveryMethod === 'inpost') {
-    // ----------------------------------------------------
-    // FLOW INPOST PACZKOMAT
-    // ----------------------------------------------------
-    log(`Wybieranie opcji dostawy "InPost Paczkomat"...`);
+    log('Wybieranie opcji dostawy "InPost Paczkomat"...');
     const inpostLabel = page.locator('label[for="delivery-method-INPOST"]').first();
     const inpostRadio = page.locator('input#delivery-method-INPOST').first();
 
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        if (await inpostLabel.isVisible()) {
-          log(`Klikanie opcji InPost (próba ${attempt})...`);
-          await inpostLabel.click();
-          await page.waitForTimeout(200);
-          
-          const isChecked = await inpostRadio.isChecked();
-          const tabVisible = await page.locator('#paczkomaty').isVisible();
-          if (isChecked || tabVisible) {
-            log(`Sukces: InPost Paczkomat został zaznaczony.`);
-            selectedInpost = true;
-            break;
-          } else {
-            log(`Opcja InPost nie została jeszcze zaznaczona, ponawiam...`);
-          }
-        } else {
-          log(`Etykieta InPost jest niewidoczna w próbie ${attempt}.`);
-        }
-      } catch (e) {
-        log(`Błąd przy zaznaczaniu InPost (próba ${attempt}): ${e.message}`);
-      }
-      await page.waitForTimeout(200);
+    if (await inpostLabel.isVisible().catch(() => false)) {
+      await inpostLabel.click().catch(() => {});
     }
+    await inpostRadio.check({ force: true }).catch(() => {});
+    await inpostRadio.dispatchEvent('change').catch(() => {});
+    selectedInpost = await inpostRadio.isChecked().catch(() => false)
+      || await page.locator('#paczkomaty').isVisible().catch(() => false);
 
-    if (!selectedInpost) {
-      log('Próba bezpośredniego zaznaczenia (check force) radia InPost...');
-      try {
-        await inpostRadio.check({ force: true });
-        await page.waitForTimeout(200);
-        if (await inpostRadio.isChecked()) {
-          log('Sukces: Radio InPost zaznaczone bezpośrednio.');
-          selectedInpost = true;
-        }
-      } catch (e) {
-        log(`Błąd bezpośredniego zaznaczania radia: ${e.message}`);
-      }
+    if (selectedInpost) {
+      log('InPost Paczkomat zaznaczony.');
     }
   } else {
     // ----------------------------------------------------
@@ -851,99 +782,17 @@ async function checkout(page, url, details, log) {
     }
   }
 
-  // Wyszukiwanie konkretnego Paczkomatu
   if (selectedInpost && details.paczkomat) {
     log(`Wprowadzanie kodu Paczkomatu: ${details.paczkomat}...`);
-    // Warp Mode: Czekamy na załadowanie widgetu mapy / pola wyszukiwania
-    const searchInput = page.locator('#easypack-search').first();
-    await searchInput.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-
-    try {
-      if (await searchInput.isVisible()) {
-        log(`Wpisywanie kodu "${details.paczkomat}" do pola #easypack-search`);
-        await searchInput.fill('');
-        await searchInput.fill(details.paczkomat);
-
-        // Wyszukiwanie sugestii w dropdownie (element, który nie jest inputem i zawiera kod paczkomatu)
-        const suggestItem = page.locator('#searchWidget *:not(input)').filter({ hasText: details.paczkomat }).first();
-        await suggestItem.waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
-        
-        if (await suggestItem.isVisible()) {
-          log(`Klikanie sugestii Paczkomatu z listy: ${await suggestItem.innerText()}`);
-          await suggestItem.click();
-          
-          const selectBtn = page.locator('#paczkomaty a:has-text("Wybierz"), #paczkomaty button:has-text("Wybierz"), #easypack-widget a:has-text("Wybierz"), #easypack-widget button:has-text("Wybierz")').first();
-          await selectBtn.waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
-        } else {
-          log(`Nie znaleziono graficznej sugestii dla "${details.paczkomat}". Próba naciśnięcia Enter lub kliknięcia Szukaj.`);
-          const searchBtn = page.locator('.easypack-search-widget .btn-search').first();
-          if (await searchBtn.isVisible()) {
-            await searchBtn.click();
-          } else {
-            await searchInput.press('Enter');
-          }
-          const selectBtn = page.locator('#paczkomaty a:has-text("Wybierz"), #paczkomaty button:has-text("Wybierz"), #easypack-widget a:has-text("Wybierz"), #easypack-widget button:has-text("Wybierz")').first();
-          await selectBtn.waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
-        }
-
-        // Klikanie przycisku "Wybierz" w dymku na mapie
-        const chooseSelectors = [
-          '#paczkomaty button:has-text("Wybierz")',
-          '#paczkomaty a:has-text("Wybierz")',
-          '.easypack-widget-button-select',
-          '.easypack-button-select',
-          'button:has-text("Wybierz")',
-          'a:has-text("Wybierz")'
-        ];
-
-        let clickedChoose = false;
-        for (const btnSel of chooseSelectors) {
-          const btn = page.locator(btnSel).first();
-          if (await btn.isVisible()) {
-            log(`Klikanie przycisku wyboru paczkomatu: ${btnSel}`);
-            await page.waitForTimeout(500); // Czekamy na animację dymka na mapie
-            await btn.click({ force: true }).catch(async () => {
-              await btn.evaluate(el => el.click()).catch(() => {});
-            });
-            clickedChoose = true;
-            // Warp Mode: Czekamy na AJAX zamiast sztywnych 2s
-            await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-            break;
-          }
-        }
-
-        if (!clickedChoose) {
-          log('Ostrzeżenie: Nie znaleziono przycisku "Wybierz" w dymku. Próba kliknięcia punktu bezpośrednio na liście...');
-          const listPointLink = page.locator(`#paczkomaty a[href="#${details.paczkomat}"], #paczkomaty a:has-text("${details.paczkomat}")`).first();
-          if (await listPointLink.isVisible()) {
-            await listPointLink.click();
-            await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
-            
-            // Spróbuj ponownie kliknąć "Wybierz" w otwartym dymku
-            for (const btnSel of chooseSelectors) {
-              const btn = page.locator(btnSel).first();
-              if (await btn.isVisible()) {
-                log(`Klikanie przycisku wyboru paczkomatu po kliknięciu listy: ${btnSel}`);
-                await page.waitForTimeout(500);
-                await btn.click({ force: true }).catch(async () => {
-                  await btn.evaluate(el => el.click()).catch(() => {});
-                });
-                clickedChoose = true;
-                await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-                break;
-              }
-            }
-          }
-        }
-      } else {
-        log('Nie znaleziono pola wyszukiwania #easypack-search w głównej ramce.');
-      }
-    } catch (e) {
-      log(`Błąd podczas wyboru paczkomatu: ${e.message}`);
+    inpostFastPath = await selectInPostPaczkomatFast(page, details.paczkomat, log);
+    if (!inpostFastPath) {
+      return { success: false, error: `Nie udało się potwierdzić paczkomatu ${details.paczkomat} (brak zielonego znacznika przy dostawie).` };
     }
+  } else if (selectedInpost && !details.paczkomat) {
+    return { success: false, error: 'Wybrano InPost, ale nie podano kodu paczkomatu w ustawieniach.' };
   }
 
-  log(`⏱️ [BENCHMARK] Wybór dostawy i adresu: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
+  log(`[BENCHMARK] Wybór dostawy i adresu: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
   deliveryTime = (Date.now() - tStepStart) / 1000;
   tStepStart = Date.now();
 
@@ -988,11 +837,9 @@ async function checkout(page, url, details, log) {
       if (await autopayLabel.isVisible()) {
         log(`Klikanie opcji Autopay (próba ${attempt})...`);
         
-        // Zabezpieczenie przed opóźnionym re-renderowaniem DOM przez Rebel po wyborze paczkomatu:
-        if (deliveryMethod === 'inpost') {
-            await page.waitForTimeout(1500);
+        if (deliveryMethod === 'inpost' && !inpostFastPath) {
+          await page.waitForResponse(res => res.url().includes('checkout') && res.status() === 200, { timeout: 3000 }).catch(() => {});
         }
-        await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
 
         await autopayLabel.click({ force: true });
         
@@ -1049,7 +896,7 @@ async function checkout(page, url, details, log) {
     }
   }
 
-  log(`⏱️ [BENCHMARK] Wybór płatności Autopay: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
+  log(`[BENCHMARK] Wybór płatności Autopay: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
   paymentTime = (Date.now() - tStepStart) / 1000;
   tStepStart = Date.now();
 
@@ -1098,7 +945,7 @@ async function checkout(page, url, details, log) {
     log(`Błąd przy wypełnianiu danych zamawiającego: ${e.message}`);
   }
 
-  log(`⏱️ [BENCHMARK] Dane zamawiającego (Krok 3): ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
+  log(`[BENCHMARK] Dane zamawiającego (Krok 3): ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
   billingTime = (Date.now() - tStepStart) / 1000;
   tStepStart = Date.now();
 
@@ -1137,30 +984,30 @@ async function checkout(page, url, details, log) {
     log(`Błąd podczas zaznaczania akceptacji regulaminu: ${e.message}`);
   }
 
-  log(`⏱️ [BENCHMARK] Akceptacja regulaminu: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
+  log(`[BENCHMARK] Akceptacja regulaminu: ${((Date.now() - tStepStart) / 1000).toFixed(2)}s`);
   termsTime = (Date.now() - tStepStart) / 1000;
-  log(`⏱️ [BENCHMARK] CAŁKOWITY CZAS CHECKOUTU: ${((Date.now() - tStart) / 1000).toFixed(2)}s`);
+  log(`[BENCHMARK] CAŁKOWITY CZAS CHECKOUTU: ${((Date.now() - tStart) / 1000).toFixed(2)}s`);
 
   // Sprawdzamy czy tryb testowy (testMode) jest włączony (domyślnie jest włączony dla bezpieczeństwa)
   const isTestMode = details.testMode !== false;
   if (isTestMode) {
-    log('🔔 [SYMULACJA] Regulamin zaakceptowany. Zatrzymano bota przed kliknięciem "KUPUJĘ I PŁACĘ" (Tryb testowy aktywny).');
+    log('[SYMULACJA] Regulamin zaakceptowany. Zatrzymano bota przed kliknięciem "KUPUJĘ I PŁACĘ" (tryb testowy aktywny).');
     
     // Czyszczenie koszyka po teście wyłączone na życzenie użytkownika
   } else {
-    log('🚀 [ZAKUP] Tryb testowy WYŁĄCZONY. Klikanie przycisku finalnego "KUPUJĘ I PŁACĘ"...');
+    log('[ZAKUP] Tryb testowy wyłączony. Klikanie przycisku finalnego "KUPUJĘ I PŁACĘ"...');
     try {
       const submitBtn = page.locator('#edit_checkout_submit').first();
       if (await submitBtn.isVisible()) {
         await submitBtn.click({ force: true });
-        log('🎉 [ZAKUP] Kliknięto przycisk finalny. Zamówienie zostało wysłane i przekierowane do Autopay!');
+        log('[ZAKUP] Kliknięto przycisk finalny. Zamówienie zostało wysłane i przekierowane do Autopay.');
         // Czekamy na przekierowanie do bramki płatności
         await page.waitForURL(url => !url.includes('rebel.pl/shopping/checkout'), { timeout: 15000 }).catch(() => {});
       } else {
-        log('❌ [BŁĄD ZAKUPU] Przycisk finalny "#edit_checkout_submit" nie jest widoczny!');
+        log('[BŁĄD ZAKUPU] Przycisk finalny "#edit_checkout_submit" nie jest widoczny.');
       }
     } catch (e) {
-      log(`❌ [BŁĄD ZAKUPU] Błąd podczas klikania przycisku finalnego: ${e.message}`);
+      log(`[BŁĄD ZAKUPU] Błąd podczas klikania przycisku finalnego: ${e.message}`);
     }
   }
 

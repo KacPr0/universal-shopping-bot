@@ -1,15 +1,10 @@
-# Universal Shopping Bot
-
-A high-performance, modular shopping bot built with Node.js, Playwright, and an elegant glassmorphism Web Dashboard. 
-
-Originally created to hunt for fast-selling items (like TCG boosters) on specific stores. Currently highly optimized for Rebel.pl with checkout speeds around 10 seconds.
-
 ## Features
 
-- Web Dashboard: Beautiful, real-time UI to manage tasks, monitor logs, and check stats.
+- Web Dashboard: Real-time UI to manage tasks, monitor logs, and check stats.
 - Ultra-Fast Checkout: Skips unnecessary steps, uses direct API requests where possible, and aggressively interacts with DOM elements to finalize orders in record time.
 - Buying Profiles: Create multiple delivery/billing profiles (e.g. different InPost lockers) and assign them to specific tasks.
 - Turbo Mode (Drop Scheduler): Set a specific drop time. The bot will automatically accelerate its polling interval (e.g. to 5 seconds) right before the drop hits.
+- Browser Clustering: Run many monitors in parallel with a configurable pool of headless browsers and separate checkout queue (ideal for massive drops).
 - Discord & Sound Alerts: Get instant notifications via Discord Webhooks and a loud alarm in the browser when a product is snagged.
 - Headless & Test Modes: Run the bot completely in the background, or use Test Mode to simulate the entire checkout process and stop exactly one click before the final payment.
 
@@ -26,12 +21,21 @@ Originally created to hunt for fast-selling items (like TCG boosters) on specifi
    ```bash
    npm install
    ```
-3. Run the bot manager (starts the backend and dashboard):
+3. Start the server (backend + dashboard in one process):
    ```bash
-   node server.js & node botManager.js
+   npm start
    ```
+   Or: `node server.js` / `npm run electron:start` for the desktop app.
 4. Open your browser and go to http://localhost:3000.
 5. Create a Buying Profile, add a product link, click "Start" and let the bot do the rest!
+
+## Tests
+
+```bash
+npm test
+```
+
+Runs unit tests for store adapters and shared search logic (no browser required).
 
 ## Note on Security
 

@@ -18,7 +18,7 @@ const checkInterval = document.getElementById('check-interval');
 const productQuantity = document.getElementById('product-quantity');
 // Zapis ustawień nie potrzebuje już nasłuchiwacza na submit, bo zmieniamy to na auto-save
 // Podłącz auto-save pod każde wejście
-['set-test-mode', 'set-mute-alarm', 'set-headless-checkout', 'set-discord', 'set-captcha-key', 'set-email', 'set-buyer-name', 'set-phone', 'set-street', 'set-city', 'set-zip', 'set-delivery-method', 'set-paczkomat', 'set-rebel-login', 'set-rebel-password'].forEach(id => {
+['set-test-mode', 'set-mute-alarm', 'set-headless-checkout', 'set-discord', 'set-captcha-key', 'set-email', 'set-buyer-name', 'set-phone', 'set-street', 'set-city', 'set-zip', 'set-delivery-method', 'set-paczkomat', 'set-rebel-login', 'set-rebel-password', 'set-cluster-browsers', 'set-cluster-checks', 'set-cluster-checkouts'].forEach(id => {
   const el = document.getElementById(id);
   if (el) {
     el.addEventListener('change', () => {
@@ -53,6 +53,10 @@ const setMuteAlarm = document.getElementById('set-mute-alarm');
 const setHeadlessCheckout = document.getElementById('set-headless-checkout');
 const btnFillTestData = document.getElementById('btn-fill-test-data');
 const setCaptchaKey = document.getElementById('set-captcha-key');
+const setClusterBrowsers = document.getElementById('set-cluster-browsers');
+const setClusterChecks = document.getElementById('set-cluster-checks');
+const setClusterCheckouts = document.getElementById('set-cluster-checkouts');
+const clusterStatsLine = document.getElementById('cluster-stats-line');
 const monitorsList = document.getElementById('monitors-list');
 // Zmienne UI już nie potrzebują obsługi task-search-mode
 // Inicjalizacja połączenia WebSocket
@@ -122,6 +126,14 @@ function handleSocketMessage(data) {
       addLogLine(data.taskId, data.message);
       break;
 
+    case 'task-update':
+      const updatedTask = tasks.find(t => t.id === data.taskId);
+      if (updatedTask && data.resolvedUrl) {
+        updatedTask.resolvedUrl = data.resolvedUrl;
+        renderTasks();
+      }
+      break;
+
     case 'status':
       const task = tasks.find(t => t.id === data.taskId);
       if (task) {
@@ -154,11 +166,11 @@ function addLogLine(taskId, message) {
   line.className = 'log-line';
   
   // Kolorowanie w zależności od zawartości
-  if (message.includes('❌') || message.includes('Błąd')) {
+  if (message.includes('[BŁĄD]') || message.includes('Błąd')) {
     line.classList.add('error-line');
-  } else if (message.includes('🎉') || message.includes('🔔') || message.includes('SUKCES')) {
+  } else if (message.includes('SUKCES') || message.includes('[ZAKUP]') || message.includes('DOSTĘPNY')) {
     line.classList.add('success-line');
-  } else if (message.includes('⏱️') || message.includes('BENCHMARK')) {
+  } else if (message.includes('BENCHMARK')) {
     line.classList.add('benchmark-line');
   } else {
     line.classList.add('task-line');
@@ -181,6 +193,19 @@ function addSystemLog(message) {
   line.innerText = `[SYSTEM] ${message}`;
   consoleTerminal.appendChild(line);
   consoleTerminal.scrollTop = consoleTerminal.scrollHeight;
+}
+
+function formatTaskUrlHtml(task) {
+  const isKeywords = !task.url.startsWith('http');
+  if (isKeywords) {
+    let html = `<div class="monitor-url" title="${task.url}">Słowa: ${task.url}</div>`;
+    if (task.resolvedUrl) {
+      html += `<a href="${task.resolvedUrl}" target="_blank" class="monitor-url resolved-url" title="${task.resolvedUrl}">${task.resolvedUrl}</a>`;
+    }
+    return html;
+  }
+  const href = task.resolvedUrl || task.url;
+  return `<a href="${href}" target="_blank" class="monitor-url" title="${href}">${href}</a>`;
 }
 
 // Renderowanie listy zadań monitorujących
@@ -225,21 +250,19 @@ function renderTasks() {
 
     // Assigned profile name for badge
     const assignedProfile = task.profileId ? profiles.find(p => p.id === task.profileId) : null;
-    const profileBadgeHtml = assignedProfile ? `<span class="profile-badge">👤 ${assignedProfile.name}</span>` : '';
+    const profileBadgeHtml = assignedProfile ? `<span class="profile-badge">${assignedProfile.name}</span>` : '';
 
     // Drop info for normal mode
     let dropInfoHtml = '';
     if (task.dropTime) {
       const dropDate = new Date(task.dropTime);
       const formattedDrop = dropDate.toLocaleString('pl-PL');
-      dropInfoHtml += `<div class="drop-info">📅 Drop: ${formattedDrop}</div>`;
+      dropInfoHtml += `<div class="drop-info">Drop: ${formattedDrop}</div>`;
       dropInfoHtml += `<div class="drop-countdown" data-drop-task-id="${task.id}" data-drop-time="${task.dropTime}"></div>`;
     }
-    const turboHtml = task.turboActive ? `<span class="turbo-badge">🔥 TURBO</span>` : '';
+    const turboHtml = task.turboActive ? `<span class="turbo-badge">TURBO</span>` : '';
     
-    const urlOrKeywordsHtml = !task.url.startsWith('http') 
-      ? `<div class="monitor-url" title="${task.url}">Słowa: ${task.url}</div>`
-      : `<a href="${task.url}" target="_blank" class="monitor-url" title="${task.url}">${task.url}</a>`;
+    const urlOrKeywordsHtml = formatTaskUrlHtml(task);
 
     if (isEditing) {
       card.innerHTML = `
@@ -370,6 +393,11 @@ function fillSettingsForm() {
   }
   setDiscord.value = settings.discordWebhookUrl || '';
   if (setCaptchaKey) setCaptchaKey.value = settings.captchaApiKey || '';
+  if (settings.cluster) {
+    if (setClusterBrowsers) setClusterBrowsers.value = settings.cluster.maxBrowsers ?? 2;
+    if (setClusterChecks) setClusterChecks.value = settings.cluster.maxConcurrentChecks ?? 4;
+    if (setClusterCheckouts) setClusterCheckouts.value = settings.cluster.maxConcurrentCheckouts ?? 1;
+  }
   togglePaczkomatVisibility();
 }
 
@@ -425,6 +453,11 @@ async function saveSettings(showNotification = true) {
   const updatedSettings = {
     discordWebhookUrl: setDiscord.value,
     captchaApiKey: setCaptchaKey ? setCaptchaKey.value : '',
+    cluster: {
+      maxBrowsers: parseInt(setClusterBrowsers?.value, 10) || 2,
+      maxConcurrentChecks: parseInt(setClusterChecks?.value, 10) || 4,
+      maxConcurrentCheckouts: parseInt(setClusterCheckouts?.value, 10) || 1
+    },
     checkoutDetails: {
       email: setEmail.value,
       phone: setPhone.value,
@@ -676,13 +709,89 @@ async function openLoginSession(store, btn) {
 
 btnLoginRebel.addEventListener('click', () => openLoginSession('rebel', btnLoginRebel));
 
+// Electron (contextIsolation) blokuje window.prompt/confirm/alert — własny modal
+function showAppDialog({ title, message, inputType = null, okText = 'OK', cancelText = 'Anuluj', alertOnly = false }) {
+  return new Promise((resolve) => {
+    const dialog = document.getElementById('app-dialog');
+    const titleEl = document.getElementById('app-dialog-title');
+    const messageEl = document.getElementById('app-dialog-message');
+    const inputEl = document.getElementById('app-dialog-input');
+    const okBtn = document.getElementById('app-dialog-ok');
+    const cancelBtn = document.getElementById('app-dialog-cancel');
+    const backdrop = document.getElementById('app-dialog-backdrop');
+
+    if (!dialog || !titleEl || !messageEl || !inputEl || !okBtn || !cancelBtn) {
+      resolve(inputType ? null : false);
+      return;
+    }
+
+    const cleanup = () => {
+      dialog.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      backdrop.removeEventListener('click', onCancel);
+      inputEl.removeEventListener('keydown', onKeydown);
+    };
+
+    const onOk = () => {
+      const value = inputType ? inputEl.value : true;
+      cleanup();
+      resolve(value);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(inputType ? null : false);
+    };
+
+    const onKeydown = (e) => {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') onCancel();
+    };
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    okBtn.textContent = okText;
+    cancelBtn.textContent = cancelText;
+
+    if (inputType) {
+      inputEl.type = inputType;
+      inputEl.value = '';
+      inputEl.classList.remove('hidden');
+      setTimeout(() => inputEl.focus(), 50);
+    } else {
+      inputEl.classList.add('hidden');
+    }
+
+    cancelBtn.style.display = alertOnly ? 'none' : '';
+    dialog.classList.remove('hidden');
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    backdrop.addEventListener('click', onCancel);
+    inputEl.addEventListener('keydown', onKeydown);
+  });
+}
+
+function showAppPrompt(title, message, inputType = 'password') {
+  return showAppDialog({ title, message, inputType, okText: 'Odblokuj', cancelText: 'Anuluj' });
+}
+
+function showAppConfirm(title, message) {
+  return showAppDialog({ title, message, okText: 'Tak', cancelText: 'Anuluj' });
+}
+
+function showAppAlert(title, message) {
+  return showAppDialog({ title, message, okText: 'OK', alertOnly: true });
+}
+
 // Funkcja zapisu stanu Dev Mode na serwerze i wyłączenia trybu symulacji przy zablokowaniu
-async function saveDevModeStateOnServer(unlocked) {
+async function saveDevModeStateOnServer(unlocked, password) {
   try {
     const res = await fetch('/api/settings/dev-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ unlocked })
+      body: JSON.stringify({ unlocked, password })
     });
     if (res.ok) {
       settings.devModeUnlocked = unlocked;
@@ -745,21 +854,34 @@ if (btnDevLock) {
   btnDevLock.addEventListener('click', async () => {
     const isDevUnlocked = localStorage.getItem('devMode') === 'true';
     if (isDevUnlocked) {
-      if (confirm('Czy chcesz zablokować tryb deweloperski i ukryć opcje zaawansowane?')) {
+      const lock = await showAppConfirm(
+        'Zablokuj Dev Mode',
+        'Czy chcesz zablokować tryb deweloperski i ukryć opcje zaawansowane?'
+      );
+      if (lock) {
         localStorage.removeItem('devMode');
         updateDevModeUI();
         addSystemLog('Tryb deweloperski został zablokowany.');
         await saveDevModeStateOnServer(false);
       }
     } else {
-      const pw = prompt('Podaj hasło deweloperskie, aby odblokować opcje zaawansowane:');
-      if (pw === 'admin') {
+      const pw = await showAppPrompt(
+        'Dev Mode',
+        'Podaj hasło deweloperskie, aby odblokować opcje zaawansowane.'
+      );
+      if (!pw) return;
+      const res = await fetch('/api/settings/dev-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unlocked: true, password: pw })
+      });
+      if (res.ok) {
         localStorage.setItem('devMode', 'true');
         updateDevModeUI();
         addSystemLog('Tryb deweloperski odblokowany pomyślnie!');
-        await saveDevModeStateOnServer(true);
-      } else if (pw !== null) {
-        alert('Błędne hasło!');
+        settings.devModeUnlocked = true;
+      } else {
+        await showAppAlert('Dev Mode', 'Błędne hasło.');
       }
     }
   });
@@ -1120,12 +1242,12 @@ function updateDropCountdowns() {
     const dropTime = new Date(el.dataset.dropTime).getTime();
     const diff = dropTime - now;
     if (diff <= 0) {
-      el.textContent = '⏰ Drop teraz!';
+      el.textContent = 'Drop teraz!';
     } else {
       const hours = Math.floor(diff / 3600000);
       const mins = Math.floor((diff % 3600000) / 60000);
       const secs = Math.floor((diff % 60000) / 1000);
-      el.textContent = `⏳ ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      el.textContent = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     }
   });
 }
@@ -1154,6 +1276,27 @@ setInterval(() => {
   if (isDevUnlocked) fetchStats();
 }, 30000);
 
+const btnClearStats = document.getElementById('btn-clear-stats');
+if (btnClearStats) {
+  btnClearStats.addEventListener('click', async () => {
+    const ok = await showAppConfirm('Wyczyść statystyki', 'Wyczyścić historię checkoutów i sprawdzeń dostępności?');
+    if (!ok) return;
+    try {
+      const res = await fetch('/api/stats/clear', { method: 'POST' });
+      if (res.ok) {
+        statsData = await res.json();
+        renderStats(statsData);
+        addSystemLog('Statystyki wyczyszczone.');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Nie udało się wyczyścić statystyk.');
+      }
+    } catch (err) {
+      alert(`Błąd sieci: ${err.message}`);
+    }
+  });
+}
+
 function renderStats(stats) {
   if (!stats) return;
   const grid = document.getElementById('stats-grid');
@@ -1161,7 +1304,9 @@ function renderStats(stats) {
   if (!grid) return;
 
   const fastest = stats.fastestCheckout != null ? `${(stats.fastestCheckout / 1000).toFixed(1)}s` : '—';
-  const average = stats.averageCheckout != null ? `${(stats.averageCheckout / 1000).toFixed(1)}s` : '—';
+  const averageRecent = stats.averageCheckoutRecent != null
+    ? `${(stats.averageCheckoutRecent / 1000).toFixed(1)}s`
+    : (stats.averageCheckout != null ? `${(stats.averageCheckout / 1000).toFixed(1)}s` : '—');
   const rate = stats.successRate != null ? Math.round(stats.successRate) : 0;
   const total = stats.totalCheckouts != null ? stats.totalCheckouts : 0;
 
@@ -1174,8 +1319,8 @@ function renderStats(stats) {
       <div class="stat-label">Najszybszy checkout</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value">${average}</div>
-      <div class="stat-label">Średni czas</div>
+      <div class="stat-value">${averageRecent}</div>
+      <div class="stat-label">Średni czas (ostatnie 10)</div>
     </div>
     <div class="stat-card">
       <div class="circular-progress">
@@ -1226,6 +1371,18 @@ function renderStats(stats) {
       }).join('');
     }
   }
+
+  if (clusterStatsLine && stats.cluster) {
+    const checks = stats.cluster.checks;
+    const checkouts = stats.cluster.checkouts;
+    if (checks && checkouts) {
+      clusterStatsLine.textContent =
+        `Klastr: ${checks.browsers}/${checks.maxBrowsers} przeglądarek · ` +
+        `${checks.activeContexts} aktywnych checków · ` +
+        `kolejka checków: ${checks.queue.pending} · ` +
+        `checkout: ${checkouts.running} aktywnych, ${checkouts.pending} w kolejce`;
+    }
+  }
 }
 
 function drawCheckoutChart(history) {
@@ -1254,22 +1411,78 @@ function drawCheckoutChart(history) {
 
   const stepColors = {
     addToCart: '#8b5cf6',
+    cartLoad: '#6366f1',
     login: '#3b82f6',
+    cartPrep: '#a855f7',
     delivery: '#10b981',
     payment: '#f59e0b',
     billing: '#ef4444',
-    terms: '#06b6d4'
+    terms: '#06b6d4',
+    other: '#4b5563'
   };
-  const stepKeys = Object.keys(stepColors);
+  const stepLabels = {
+    addToCart: 'koszyk',
+    cartLoad: 'kasa',
+    login: 'login',
+    cartPrep: 'przygot.',
+    delivery: 'dostawa',
+    payment: 'płatność',
+    billing: 'dane',
+    terms: 'regulamin',
+    other: 'inne'
+  };
+  const stepKeys = ['addToCart', 'cartLoad', 'login', 'cartPrep', 'delivery', 'payment', 'billing', 'terms', 'other'];
 
-  // Find max total time for Y scale
+  const entryTotalSec = (entry) => {
+    if (entry.totalTime != null && entry.totalTime > 0) return entry.totalTime;
+    return stepKeys.reduce((sum, key) => sum + ((entry.steps && entry.steps[key]) || 0), 0);
+  };
+
+  const entrySegments = (entry) => {
+    const total = entryTotalSec(entry);
+    const steps = entry.steps || {};
+    const raw = {};
+    let trackedSum = 0;
+    for (const key of stepKeys) {
+      if (key === 'other') continue;
+      const val = steps[key] || 0;
+      if (val > 0) {
+        raw[key] = val;
+        trackedSum += val;
+      }
+    }
+
+    const segments = {};
+    if (total <= 0) return { total: 0, segments };
+
+    if (trackedSum <= 0) {
+      segments.other = total;
+      return { total, segments };
+    }
+
+    // Stare wpisy mają nakładające się kroki (cartPrep liczył też koszyk) — skaluj do totalTime
+    if (trackedSum > total) {
+      const scale = total / trackedSum;
+      for (const key of Object.keys(raw)) {
+        segments[key] = raw[key] * scale;
+      }
+      return { total, segments };
+    }
+
+    Object.assign(segments, raw);
+    const remainder = total - trackedSum;
+    if (remainder > 0.05) segments.other = remainder;
+    return { total, segments };
+  };
+
+  // Skala Y = max totalTime + zapas na etykietę nad słupkiem
   let maxTotal = 0;
   data.forEach(entry => {
-    let total = 0;
-    stepKeys.forEach(key => { total += ((entry.steps && entry.steps[key]) || 0); });
+    const total = entryTotalSec(entry);
     if (total > maxTotal) maxTotal = total;
   });
-  if (maxTotal === 0) maxTotal = 1000;
+  if (maxTotal === 0) maxTotal = 10;
+  const yMax = maxTotal * 1.18 + 0.3;
 
   const paddingLeft = 50;
   const paddingRight = 20;
@@ -1288,7 +1501,7 @@ function drawCheckoutChart(history) {
   ctx.textAlign = 'right';
   for (let i = 0; i <= 4; i++) {
     const y = paddingTop + (chartH / 4) * i;
-    const val = ((maxTotal * (4 - i)) / 4).toFixed(1);
+    const val = ((yMax * (4 - i)) / 4).toFixed(1);
     ctx.beginPath();
     ctx.moveTo(paddingLeft, y);
     ctx.lineTo(displayW - paddingRight, y);
@@ -1296,32 +1509,29 @@ function drawCheckoutChart(history) {
     ctx.fillText(`${val}s`, paddingLeft - 8, y + 4);
   }
 
-  // Draw stacked bars
+  // Draw stacked bars (wysokość = totalTime z logu)
   data.forEach((entry, i) => {
     const x = paddingLeft + barGap * (i + 1) + barWidth * i;
+    const { total, segments } = entrySegments(entry);
     let yOffset = paddingTop + chartH;
-    let totalBarVal = 0;
 
     stepKeys.forEach(key => {
-      const val = (entry.steps && entry.steps[key]) || 0;
-      totalBarVal += val;
-      const barH = (val / maxTotal) * chartH;
-      if (barH > 0) {
+      const val = segments[key] || 0;
+      const barH = (val / yMax) * chartH;
+      if (barH > 0.5) {
         yOffset -= barH;
         ctx.fillStyle = stepColors[key];
-        // Rounded top for top segment only
         ctx.beginPath();
         ctx.roundRect(x, yOffset, barWidth, barH, [2, 2, 0, 0]);
         ctx.fill();
       }
     });
 
-    // Total time text above the bar
-    if (totalBarVal > 0) {
+    if (total > 0) {
       ctx.fillStyle = '#f3f4f6';
       ctx.font = 'bold 11px Outfit, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(totalBarVal.toFixed(1) + 's', x + barWidth / 2, yOffset - 6);
+      ctx.fillText(total.toFixed(1) + 's', x + barWidth / 2, yOffset - 6);
     }
 
     // Label under bar
@@ -1336,12 +1546,14 @@ function drawCheckoutChart(history) {
   let legendX = paddingLeft;
   ctx.font = '10px Outfit, sans-serif';
   stepKeys.forEach(key => {
+    if (key === 'other') return;
+    const label = stepLabels[key] || key;
     ctx.fillStyle = stepColors[key];
     ctx.fillRect(legendX, legendY - 8, 8, 8);
     ctx.fillStyle = '#9ca3af';
     ctx.textAlign = 'left';
-    ctx.fillText(key, legendX + 12, legendY);
-    legendX += ctx.measureText(key).width + 24;
+    ctx.fillText(label, legendX + 12, legendY);
+    legendX += ctx.measureText(label).width + 24;
   });
 }
 

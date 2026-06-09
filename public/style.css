@@ -82,6 +82,15 @@ header {
   animation: pulse-slow 4s infinite alternate;
 }
 
+.logo-icon-img {
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.35);
+}
+
 .logo-text h1 {
   font-size: 1.5rem;
   font-weight: 800;
@@ -439,6 +448,13 @@ input:focus, select:focus {
   padding: 2px 8px;
   border-radius: 20px;
   border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.monitor-url.resolved-url {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.85;
+  margin-top: 4px;
 }
 
 .monitor-store.pokecenter {
@@ -1102,4 +1118,67 @@ footer {
 #availability-list::-webkit-scrollbar-thumb {
   background: rgba(139, 92, 246, 0.5);
   border-radius: 4px;
+}
+
+.app-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.app-dialog.hidden {
+  display: none;
+}
+
+.app-dialog__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+.app-dialog__card {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  padding: 24px;
+  z-index: 1;
+}
+
+.app-dialog__title {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.app-dialog__message {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.app-dialog__input {
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.app-dialog__input.hidden {
+  display: none;
+}
+
+.app-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }

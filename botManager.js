@@ -5,11 +5,25 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 const ws = require('ws');
 
 const RecaptchaPlugin = require('puppeteer-extra-plugin-recaptcha');
+const BrowserCluster = require('./lib/browserCluster');
+const ConcurrencyQueue = require('./lib/concurrencyQueue');
+const retryWithBackoff = require('./lib/retryWithBackoff');
+const { getDbPath, getSessionsDir, getCheckoutErrorsDir, getDataDir } = require('./lib/paths');
+
+const STAGGER_MAX_MS = 30_000;
+const CHECK_RETRY_ATTEMPTS = 3;
+const CHECK_RETRY_BASE_MS = 2000;
+
+const DEFAULT_CLUSTER = {
+  maxBrowsers: 2,
+  maxConcurrentChecks: 4,
+  maxConcurrentCheckouts: 1
+};
 
 // Użycie stealth plugin z playwright-extra
 chromium.use(stealth);
 
-const DB_PATH = path.join(__dirname, 'db.json');
+const DB_PATH = getDbPath();
 
 // Helper do czyszczenia blokad sesji Chromium (zapobiega konfliktom i zamarzaniu na about:blank)
 function clearChromiumLocks(profileDir) {
@@ -33,8 +47,15 @@ async function setupContextRouting(context) {
     await context.route('**/*', (route) => {
       const url = route.request().url().toLowerCase();
       const type = route.request().resourceType();
+      const isInPostMapAsset =
+        url.includes('easypack24.net') ||
+        url.includes('geowidget.easypack') ||
+        url.includes('api.inpost.pl') ||
+        url.includes('osm.inpost.pl') ||
+        url.includes('inpost.pl/osm_tiles');
+
       if (
-        type === 'image' ||
+        (type === 'image' && !isInPostMapAsset) ||
         type === 'font' ||
         type === 'media' ||
         url.includes('google-analytics') ||
@@ -71,6 +92,7 @@ class BotManager {
     this.activeSessions = new Map(); // store -> { context, page }
     this.wsServer = null;
     this.loadDb();
+    this._initCluster();
     
     if (this.settings.captchaApiKey) {
       chromium.use(RecaptchaPlugin({
@@ -88,7 +110,10 @@ class BotManager {
       if (fs.existsSync(DB_PATH)) {
         const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
         this.tasks = data.tasks || [];
-        this.settings = data.settings || { discordWebhookUrl: '', checkoutDetails: {} };
+        this.settings = data.settings || { discordWebhookUrl: '', checkoutDetails: {}, cluster: { ...DEFAULT_CLUSTER } };
+        if (!this.settings.cluster) {
+          this.settings.cluster = { ...DEFAULT_CLUSTER };
+        }
         this.profiles = data.profiles || [];
         this.stats = data.stats || { checkouts: [], availability: [] };
       }
@@ -131,7 +156,45 @@ class BotManager {
 
   updateSettings(newSettings) {
     this.settings = { ...this.settings, ...newSettings };
+    if (newSettings.cluster) {
+      this.settings.cluster = { ...this.settings.cluster, ...newSettings.cluster };
+    }
+    this._applyClusterSettings();
     this.saveDb();
+  }
+
+  _initCluster() {
+    const cluster = this.settings.cluster || DEFAULT_CLUSTER;
+    this.checkCluster = new BrowserCluster({
+      maxBrowsers: cluster.maxBrowsers ?? DEFAULT_CLUSTER.maxBrowsers,
+      maxConcurrency: cluster.maxConcurrentChecks ?? DEFAULT_CLUSTER.maxConcurrentChecks,
+      setupContextRouting
+    });
+    this.checkoutQueue = new ConcurrencyQueue(
+      cluster.maxConcurrentCheckouts ?? DEFAULT_CLUSTER.maxConcurrentCheckouts
+    );
+  }
+
+  _applyClusterSettings() {
+    const cluster = this.settings.cluster || DEFAULT_CLUSTER;
+    if (this.checkCluster) {
+      this.checkCluster.configure({
+        maxBrowsers: cluster.maxBrowsers ?? DEFAULT_CLUSTER.maxBrowsers,
+        maxConcurrency: cluster.maxConcurrentChecks ?? DEFAULT_CLUSTER.maxConcurrentChecks
+      });
+    }
+    if (this.checkoutQueue) {
+      this.checkoutQueue.setMaxConcurrency(
+        cluster.maxConcurrentCheckouts ?? DEFAULT_CLUSTER.maxConcurrentCheckouts
+      );
+    }
+  }
+
+  getClusterStats() {
+    return {
+      checks: this.checkCluster ? this.checkCluster.getStats() : null,
+      checkouts: this.checkoutQueue ? this.checkoutQueue.getStats() : null
+    };
   }
 
   // --- Profile zakupowe (CRUD) ---
@@ -183,6 +246,12 @@ class BotManager {
 
   // --- Statystyki ---
 
+  clearStats() {
+    this.stats = { checkouts: [], availability: [] };
+    this.saveDb();
+    return this.getStats();
+  }
+
   getStats() {
     const checkouts = this.stats.checkouts || [];
     const successful = checkouts.filter(c => c.success);
@@ -201,15 +270,27 @@ class BotManager {
     });
 
     const averageCheckout = successful.length > 0 ? totalMs / successful.length : null;
+
+    const recentSuccessful = successful.slice(-10);
+    let recentTotalMs = 0;
+    recentSuccessful.forEach(c => {
+      if (c.totalTime > 0) recentTotalMs += c.totalTime * 1000;
+    });
+    const averageCheckoutRecent = recentSuccessful.length > 0
+      ? recentTotalMs / recentSuccessful.length
+      : null;
+
     const successRate = checkouts.length > 0 ? (successful.length / checkouts.length) * 100 : 0;
 
     return {
       fastestCheckout,
       averageCheckout,
+      averageCheckoutRecent,
       successRate,
       totalCheckouts: checkouts.length,
       checkoutHistory: checkouts,
-      availabilityChecks: this.stats.availability || []
+      availabilityChecks: this.stats.availability || [],
+      cluster: this.getClusterStats()
     };
   }
 
@@ -224,6 +305,7 @@ class BotManager {
       dropTime: null,
       turboWindow: 10,
       turboInterval: 5,
+      resolvedUrl: null,
       status: 'idle',
       logs: []
     };
@@ -294,7 +376,7 @@ class BotManager {
       this._startTurboChecker(id);
     }
 
-    this.log(id, `📅 Ustawiono drop schedule: ${dropTime}, okno turbo: ${task.turboWindow} min, interwał turbo: ${task.turboInterval}s`);
+    this.log(id, `Ustawiono drop schedule: ${dropTime}, okno turbo: ${task.turboWindow} min, interwał turbo: ${task.turboInterval}s`);
     return task;
   }
 
@@ -315,12 +397,12 @@ class BotManager {
       if (active.turboActive) {
         active.turboActive = false;
         this._restoreNormalInterval(id);
-        this.log(id, '🔥 TRYB TURBO zakończony. Powrót do normalnego interwału.');
+        this.log(id, 'TRYB TURBO zakończony. Powrót do normalnego interwału.');
         this.broadcast({ type: 'turbo', taskId: id, active: false, dropTime: null, turboWindow: task.turboWindow });
       }
     }
 
-    this.log(id, '📅 Drop schedule wyczyszczony.');
+    this.log(id, 'Drop schedule wyczyszczony.');
     return task;
   }
 
@@ -347,13 +429,13 @@ class BotManager {
       active.intervalId = setInterval(() => {
         this.checkAndBuy(id);
       }, turboMs);
-      this.log(id, `🔥 TRYB TURBO aktywowany! Sprawdzanie co ${task.turboInterval} sekund.`);
+      this.log(id, `TRYB TURBO aktywowany. Sprawdzanie co ${task.turboInterval} sekund.`);
       this.broadcast({ type: 'turbo', taskId: id, active: true, dropTime: task.dropTime, turboWindow: task.turboWindow });
     } else if (!inWindow && active.turboActive) {
       // Wyjście z trybu turbo
       active.turboActive = false;
       this._restoreNormalInterval(id);
-      this.log(id, '🔥 TRYB TURBO zakończony. Powrót do normalnego interwału.');
+      this.log(id, 'TRYB TURBO zakończony. Powrót do normalnego interwału.');
       this.broadcast({ type: 'turbo', taskId: id, active: false, dropTime: task.dropTime, turboWindow: task.turboWindow });
     }
   }
@@ -398,6 +480,8 @@ class BotManager {
       intervalId: null,
       turboCheckerId: null,
       turboActive: false,
+      checkInFlight: false,
+      checkoutQueued: false,
       browser: null,
       page: null
     });
@@ -405,23 +489,59 @@ class BotManager {
     this.updateTaskStatus(id, 'polling');
     this.log(id, `Rozpoczęto cykl sprawdzania co ${task.interval} minut.`);
 
-    // Od razu uruchamiamy pierwsze sprawdzenie
-    this.checkAndBuy(id);
-
-    // Konfigurujemy cykliczne sprawdzanie
-    const intervalMs = task.interval * 60 * 1000;
-    const intervalId = setInterval(() => {
+    const active = this.activeTasks.get(id);
+    const startPolling = () => {
       this.checkAndBuy(id);
-    }, intervalMs);
+      const intervalMs = task.interval * 60 * 1000;
+      active.intervalId = setInterval(() => {
+        this.checkAndBuy(id);
+      }, intervalMs);
+    };
 
-    this.activeTasks.get(id).intervalId = intervalId;
+    const otherActiveMonitors = this.activeTasks.size - 1;
+    if (otherActiveMonitors > 0) {
+      const staggerMs = Math.floor(Math.random() * STAGGER_MAX_MS) + 1;
+      this.log(id, `Start opóźniony o ${(staggerMs / 1000).toFixed(0)}s (stagger — ${otherActiveMonitors} innych monitorów aktywnych).`);
+      active.staggerTimeoutId = setTimeout(startPolling, staggerMs);
+    } else {
+      startPolling();
+    }
 
     // Jeśli zadanie ma ustawiony dropTime, uruchamiamy turbo checker
     if (task.dropTime) {
       this._startTurboChecker(id);
     }
 
+    if (fs.existsSync(getSessionsDir(task.store))) {
+      this._prewarmStoreSession(task.store).catch(() => {});
+    }
+
     this.saveDb();
+  }
+
+  async _prewarmStoreSession(store) {
+    const sessionDir = getSessionsDir(store);
+    if (!fs.existsSync(sessionDir)) return;
+
+    console.log(`[Prewarm] Podgrzewanie sesji ${store} (DNS/TLS/cookies)...`);
+    let context;
+    try {
+      clearChromiumLocks(sessionDir);
+      context = await chromium.launchPersistentContext(sessionDir, {
+        headless: true,
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+      });
+      const page = context.pages()[0] || await context.newPage();
+      await page.goto('https://www.rebel.pl/shopping/checkout', {
+        waitUntil: 'commit',
+        timeout: 15000
+      }).catch(() => {});
+      console.log(`[Prewarm] Sesja ${store} gotowa.`);
+    } finally {
+      if (context) {
+        await context.close().catch(() => {});
+      }
+    }
   }
 
   stopTask(id) {
@@ -431,17 +551,24 @@ class BotManager {
     if (active.intervalId) {
       clearInterval(active.intervalId);
     }
+    if (active.staggerTimeoutId) {
+      clearTimeout(active.staggerTimeoutId);
+    }
     if (active.turboCheckerId) {
       clearInterval(active.turboCheckerId);
     }
 
-    this.cleanupBrowser(id).then(() => {
+    this.cleanupBrowser(id).then(async () => {
       this.activeTasks.delete(id);
       const task = this.tasks.find(t => t.id === id);
       if (task) task.status = 'idle';
       this.updateTaskStatus(id, 'idle');
       this.log(id, 'Zatrzymano monitorowanie.');
       this.saveDb();
+
+      if (this.activeTasks.size === 0) {
+        await this.checkCluster.shutdown();
+      }
     });
   }
 
@@ -513,42 +640,58 @@ class BotManager {
     const active = this.activeTasks.get(id);
     if (!active) return;
 
-    // Jeżeli bot jest w trakcie koszykowania lub kasy, nie odpalamy kolejnego sprawdzenia w pętli
     if (active.status !== 'polling') {
       this.log(id, `Pętla zablokowana. Bot jest w stanie: ${active.status}`);
+      return;
+    }
+
+    if (active.checkInFlight) {
+      this.log(id, 'Poprzednie sprawdzenie jeszcze w toku — pomijam ten cykl.');
       return;
     }
 
     const task = this.tasks.find(t => t.id === id);
     if (!task) return;
 
-    this.log(id, 'Sprawdzanie dostępności produktu...');
-    
-    let browser = null;
-    let page = null;
+    const queueStats = this.checkCluster.getStats().queue;
+    if (queueStats.pending > 0) {
+      this.log(id, `Kolejka klastra: ${queueStats.pending} checków przed tym zadaniem.`);
+    }
+
+    const checkInput = task.resolvedUrl || task.url;
+    this.log(id, `Sprawdzanie dostępności produktu...${task.resolvedUrl ? ' (zapisany URL)' : ''}`);
+    active.checkInFlight = true;
+
     try {
-      const launchOptions = { headless: true };
-      
-      // Uruchamiamy przeglądarkę bezgłową (headless: true) do samego sprawdzenia dostępności
-      browser = await chromium.launch(launchOptions);
-      const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 800 }
-      });
-      await setupContextRouting(context);
-      page = await context.newPage();
+      const checkResult = await retryWithBackoff(
+        () => this.checkCluster.run(async ({ page }) => {
+          const adapterPath = path.join(__dirname, 'sites', `${task.store}.js`);
+          if (!fs.existsSync(adapterPath)) {
+            throw new Error(`Brak obsługi sklepu: ${task.store}`);
+          }
+          const adapter = require(adapterPath);
+          return adapter.checkAvailability(page, checkInput, (msg) => this.log(id, msg));
+        }),
+        {
+          attempts: CHECK_RETRY_ATTEMPTS,
+          baseDelayMs: CHECK_RETRY_BASE_MS,
+          onRetry: (attempt, maxAttempts, delayMs, err) => {
+            this.log(id, `Ponowienie checku (próba ${attempt + 1}/${maxAttempts}) za ${delayMs / 1000}s — ${err.message}`);
+          }
+        }
+      );
 
-      // Załaduj adapter
-      const adapterPath = path.join(__dirname, 'sites', `${task.store}.js`);
-      if (!fs.existsSync(adapterPath)) {
-        throw new Error(`Brak obsługi sklepu: ${task.store}`);
+      if (checkResult.resolvedUrl && checkResult.resolvedUrl !== task.resolvedUrl) {
+        task.resolvedUrl = checkResult.resolvedUrl;
+        this.saveDb();
+        this.log(id, `Zapisano URL produktu: ${checkResult.resolvedUrl}`);
+        this.broadcast({
+          type: 'task-update',
+          taskId: id,
+          resolvedUrl: task.resolvedUrl
+        });
       }
-      const adapter = require(adapterPath);
 
-      // Sprawdź dostępność
-      const checkResult = await adapter.checkAvailability(page, task.url, (msg) => this.log(id, msg));
-      
-      // Statystyki: zapis wyniku sprawdzenia dostępności
       this.stats.availability.push({
         timestamp: Date.now(),
         taskId: id,
@@ -560,30 +703,36 @@ class BotManager {
       if (this.stats.availability.length > 100) this.stats.availability.shift();
       this.saveDb();
 
-      await browser.close();
-      browser = null;
-
       if (checkResult.available) {
         const resolvedUrl = checkResult.resolvedUrl || task.url;
-        this.log(id, `🎉 Produkt JEST DOSTĘPNY! [Nazwa: ${checkResult.productName || 'nieznana'}, Cena: ${checkResult.price || 'nieznana'}]`);
-        // Wyślij wstępny webhook
-        await this.sendDiscordWebhook(`🔔 **Produkt dostępny!**\nNazwa: ${checkResult.productName || 'N/A'}\nCena: ${checkResult.price || 'N/A'}\nRozpoczynam proces automatycznego zakupu... \nLink: ${resolvedUrl}`);
-        
-        // Przechodzimy do zakupu
-        this.executeCheckout(id, checkResult.productName, resolvedUrl);
+        this.log(id, `Produkt JEST DOSTĘPNY. [Nazwa: ${checkResult.productName || 'nieznana'}, Cena: ${checkResult.price || 'nieznana'}]`);
+        await this.sendDiscordWebhook(`**Produkt dostępny**\nNazwa: ${checkResult.productName || 'N/A'}\nCena: ${checkResult.price || 'N/A'}\nRozpoczynam proces automatycznego zakupu...\nLink: ${resolvedUrl}`);
+        this.enqueueCheckout(id, checkResult.productName, resolvedUrl);
       } else {
         this.log(id, `Produkt niedostępny. Kolejna próba za ${task.interval} min.`);
       }
-
     } catch (err) {
-      this.log(id, `❌ Błąd podczas sprawdzania dostępności: ${err.message}`);
-      if (browser) {
-        await browser.close().catch(() => {});
-      }
+      this.log(id, `[BŁĄD] Błąd podczas sprawdzania dostępności: ${err.message}`);
+    } finally {
+      active.checkInFlight = false;
     }
   }
 
-  async executeCheckout(id, productName, resolvedUrl) {
+  enqueueCheckout(id, productName, resolvedUrl) {
+    const active = this.activeTasks.get(id);
+    if (!active) return;
+
+    const checkoutStats = this.checkoutQueue.getStats();
+    if (checkoutStats.pending > 0 || checkoutStats.running > 0) {
+      this.log(id, `Checkout w kolejce (aktywne: ${checkoutStats.running}, oczekujące: ${checkoutStats.pending}).`);
+    }
+
+    this.checkoutQueue.run(() => this._executeCheckout(id, productName, resolvedUrl)).catch((err) => {
+      this.log(id, `[BŁĄD] Błąd kolejki checkout: ${err.message}`);
+    });
+  }
+
+  async _executeCheckout(id, productName, resolvedUrl) {
     const active = this.activeTasks.get(id);
     if (!active) return;
 
@@ -592,7 +741,7 @@ class BotManager {
     const task = this.tasks.find(t => t.id === id);
     if (!task) return;
 
-    const targetUrl = resolvedUrl || task.url;
+    const targetUrl = resolvedUrl || task.resolvedUrl || task.url;
 
     try {
       let context;
@@ -601,14 +750,14 @@ class BotManager {
 
       // Sprawdzamy, czy użytkownik ma już otwarte okno logowania dla tego sklepu
       if (this.activeSessions.has(task.store)) {
-        this.log(id, `🔄 Wykryto otwarte okno sesji dla ${task.store}. Reużywanie aktywnej przeglądarki...`);
+        this.log(id, `Wykryto otwarte okno sesji dla ${task.store}. Reużywanie aktywnej przeglądarki...`);
         const session = this.activeSessions.get(task.store);
         context = session.context;
         page = session.page;
         isSharedSession = true;
       } else {
         this.log(id, 'Uruchamianie przeglądarki (headed) w celu realizacji zakupu...');
-        const sessionDir = path.join(__dirname, '.sessions', task.store);
+        const sessionDir = getSessionsDir(task.store);
         
         // Zapewniamy, że katalog istnieje
         if (!fs.existsSync(sessionDir)) {
@@ -655,7 +804,7 @@ class BotManager {
       if (task.profileId) {
         const profile = this.profiles.find(p => p.id === task.profileId);
         if (profile) {
-          this.log(id, `📋 Używanie profilu zakupowego: "${profile.name}"`);
+          this.log(id, `Używanie profilu zakupowego: "${profile.name}"`);
           profileOverrides = {
             email: profile.email || undefined,
             phone: profile.phone || undefined,
@@ -671,7 +820,7 @@ class BotManager {
           // Usuwamy klucze z wartością undefined, żeby nie nadpisywały istniejących danych
           Object.keys(profileOverrides).forEach(k => profileOverrides[k] === undefined && delete profileOverrides[k]);
         } else {
-          this.log(id, `⚠️ Profil ${task.profileId} nie został znaleziony. Używam globalnych ustawień.`);
+          this.log(id, `[UWAGA] Profil ${task.profileId} nie został znaleziony. Używam globalnych ustawień.`);
         }
       }
 
@@ -701,10 +850,10 @@ class BotManager {
         this.saveDb();
 
         this.updateTaskStatus(id, 'checkout-ready');
-        this.log(id, '🔔 SUKCES: Dane dostawy zostały wypełnione! Odtwarzam alarm. Dokończ płatność w oknie przeglądarki.');
+        this.log(id, 'SUKCES: Dane dostawy zostały wypełnione. Odtwarzam alarm. Dokończ płatność w oknie przeglądarki.');
         
         // Wyślij webhook Discord
-        await this.sendDiscordWebhook(`🚀 **Kasa gotowa do opłacenia!**\nProdukt: ${productName || 'N/A'}\nSklep: ${task.store.toUpperCase()}\nStatus: Sukces bota. Proszę dokończyć płatność w otwartym oknie na komputerze hosta.`);
+        await this.sendDiscordWebhook(`**Kasa gotowa do opłacenia**\nProdukt: ${productName || 'N/A'}\nSklep: ${task.store.toUpperCase()}\nStatus: Sukces bota. Proszę dokończyć płatność w otwartym oknie na komputerze hosta.`);
 
         // Zatrzymujemy odpytywanie dla tego zadania
         if (active.intervalId) {
@@ -728,18 +877,39 @@ class BotManager {
       if (this.stats.checkouts.length > 100) this.stats.checkouts.shift();
       this.saveDb();
 
-      this.log(id, `❌ Błąd podczas checkoutu: ${err.message}`);
+      const screenshotPath = await this._captureCheckoutFailure(id, active.page, err);
+      this.log(id, `[BŁĄD] Błąd podczas checkoutu: ${err.message}`);
       this.updateTaskStatus(id, 'failed');
-      await this.sendDiscordWebhook(`⚠️ **Błąd bota zakupowego!**\nZadanie: ${task.url}\nBłąd: ${err.message}`);
+      const screenshotNote = screenshotPath
+        ? `\nZrzut ekranu: \`${path.relative(getDataDir(), screenshotPath)}\``
+        : '';
+      await this.sendDiscordWebhook(`**Błąd bota zakupowego**\nZadanie: ${task.resolvedUrl || task.url}\nBłąd: ${err.message}${screenshotNote}`);
       await this.cleanupBrowser(id);
       // Resetujemy status na polling po błędzie, aby spróbował ponownie w kolejnym cyklu
       setTimeout(() => {
         if (this.activeTasks.has(id)) {
           this.activeTasks.get(id).status = 'polling';
           this.updateTaskStatus(id, 'polling');
-          this.log(id, '🔄 Ponowne uruchomienie monitorowania po błędzie.');
+          this.log(id, 'Ponowne uruchomienie monitorowania po błędzie.');
         }
       }, 5000);
+    }
+  }
+
+  async _captureCheckoutFailure(id, page, err) {
+    if (!page) return null;
+
+    try {
+      const screenshotDir = getCheckoutErrorsDir();
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `${id}_${ts}.png`;
+      const filePath = path.join(screenshotDir, fileName);
+      await page.screenshot({ path: filePath, fullPage: true });
+      this.log(id, `Zrzut ekranu błędu: logs/checkout-errors/${fileName}`);
+      return filePath;
+    } catch (captureErr) {
+      this.log(id, `Nie udało się zapisać zrzutu ekranu: ${captureErr.message}`);
+      return null;
     }
   }
 
@@ -793,14 +963,13 @@ class BotManager {
       return;
     }
 
-    const sessionDir = path.join(__dirname, '.sessions', store);
+    const sessionDir = getSessionsDir(store);
     if (!fs.existsSync(sessionDir)) {
       fs.mkdirSync(sessionDir, { recursive: true });
     }
-    
-    // Czyścimy osierocone blokady przed uruchomieniem
+
     clearChromiumLocks(sessionDir);
-    
+
     console.log(`Otwieranie okna logowania dla ${store}...`);
     const context = await chromium.launchPersistentContext(sessionDir, {
       headless: false,
