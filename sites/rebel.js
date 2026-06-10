@@ -3,7 +3,12 @@
  */
 
 const SELECTORS = require('./rebel-selectors');
-const { validateProductName } = require('./lib/productSearch');
+const {
+  parseSearchQuery,
+  buildSearchPhrases,
+  findBestProductMatch,
+  validateProductName
+} = require('./lib/productSearch');
 const {
   extractProductId,
   clearCartViaApi,
@@ -170,50 +175,104 @@ async function handleLoginIfRequired(page, details, log) {
   return loginElapsed;
 }
 
-/**
- * Rozpoznaje czy wejście to URL czy fraza do wyszukiwania. Jeśli fraza, wyszukuje produkt i zwraca jego URL.
- */
-async function resolveProductUrl(page, input, log) {
-  if (input.startsWith('http://') || input.startsWith('https://')) {
-    return input;
-  }
-  
-  log(`Wyszukiwanie produktu na Rebel.pl dla frazy: "${input}"`);
-  const searchUrl = `https://rebel.pl/site/search?phrase=${encodeURIComponent(input)}`;
-  
-  // Przejście do wyszukiwania
-  await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  // Warp Mode: Czekamy na pojawienie się wyników wyszukiwania zamiast sztywnych 2s
-  await page.locator('main a[href$=".html"]').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+function isProductHref(href) {
+  if (!href || !href.endsWith('.html')) return false;
+  return !(
+    href.includes('/cart') ||
+    href.includes('/checkout') ||
+    href.includes('/szukaj') ||
+    href.includes('/login') ||
+    href.includes('/register') ||
+    href.includes('/site/')
+  );
+}
 
-  // Pobieramy wszystkie linki w głównym kontenerze i szukamy pasującego
-  const allLinks = await page.locator('main a[href$=".html"]').all();
-  log(`Analizowanie ${allLinks.length} potencjalnych linków na stronie wyników...`);
+function resolveRebelUrl(href) {
+  return href.startsWith('http') ? href : new URL(href, 'https://www.rebel.pl').toString();
+}
 
-  for (const link of allLinks) {
+async function extractSearchResults(page) {
+  const cards = await page.locator(SELECTORS.search.productCards).all();
+  const products = [];
+
+  for (const card of cards) {
     try {
-      const href = await link.getAttribute('href');
-      if (href) {
-        // Odrzucamy linki, które na pewno nie są kartami produktów
-        if (href.includes('/cart') || href.includes('/checkout') || href.includes('/szukaj') || href.includes('/login') || href.includes('/register') || href.includes('/site/')) {
-          continue;
-        }
+      let href = await card.getAttribute('data-url');
+      if (!href) {
+        href = await card.locator('a[href$=".html"]').first().getAttribute('href').catch(() => null);
+      }
+      if (!isProductHref(href)) continue;
 
-        const text = await link.innerText();
-        const cleanText = text.trim();
-
-        if (cleanText.length > 2 && validateProductName(input, cleanText)) {
-          const resolved = href.startsWith('http') ? href : new URL(href, 'https://rebel.pl').toString();
-          log(`Znaleziono produkt pasujący do nazwy: "${cleanText}" -> ${resolved}`);
-          return resolved;
+      let name = (await card.getAttribute('data-name').catch(() => '')) || '';
+      const titleLocators = [
+        '.product__title a',
+        '.product__title',
+        '.product__name',
+        '.product-name',
+        'h2',
+        'h3',
+        'a[href$=".html"]'
+      ];
+      if (!name) {
+        for (const sel of titleLocators) {
+          const loc = card.locator(sel).first();
+          if (await loc.count()) {
+            name = (await loc.innerText().catch(() => '')).trim();
+            if (name) break;
+          }
         }
       }
-    } catch (e) {
-      // Ignorujemy błędy pobierania atrybutów pojedynczych linków
+      if (!name) {
+        name = (await card.innerText().catch(() => '')).trim().split('\n')[0];
+      }
+      if (!name) continue;
+
+      products.push({ name, href: resolveRebelUrl(href) });
+    } catch (e) {}
+  }
+
+  return products;
+}
+
+async function waitForSearchResults(page) {
+  await page
+    .waitForFunction(
+      () => {
+        const products = document.querySelectorAll('#search-results .js-product, #search-results .product');
+        const noResults = document.querySelector('#no-results:not(.d-none), .search--no-items');
+        return products.length > 0 || noResults;
+      },
+      { timeout: 20000 }
+    )
+    .catch(() => {});
+}
+
+/**
+ * Wyszukuje produkt na Rebel.pl po frazie i zwraca URL najlepszego dopasowania.
+ */
+async function findProductUrlBySearch(page, input, log) {
+  const { searchPhrase, negativeWords } = parseSearchQuery(input);
+  const phrases = buildSearchPhrases(searchPhrase);
+
+  for (const phrase of phrases) {
+    log(`Wyszukiwanie na Rebel.pl: "${phrase}"`);
+    const searchUrl = `https://www.rebel.pl/site/search?phrase=${encodeURIComponent(phrase)}`;
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await waitForSearchResults(page);
+
+    const products = await extractSearchResults(page);
+    log(`Znaleziono ${products.length} wyników dla frazy "${phrase}".`);
+
+    if (products.length === 0) continue;
+
+    const match = findBestProductMatch(input, products, { negativeWords, minScore: 0.65 });
+    if (match) {
+      log(`Dopasowanie (${Math.round(match.score * 100)}%): "${match.name}" -> ${match.href}`);
+      return match.href;
     }
   }
 
-  throw new Error(`Nie znaleziono żadnego produktu pasującego do frazy: "${input}"`);
+  return null;
 }
 
 /**
@@ -225,58 +284,14 @@ async function resolveProductUrl(page, input, log) {
 async function checkAvailability(page, inputUrl, log) {
   if (!inputUrl.startsWith('http://') && !inputUrl.startsWith('https://')) {
     log(`Wyszukiwanie produktu na Rebel.pl według słów kluczowych: "${inputUrl}"`);
-    
-    const words = inputUrl.split(' ').filter(w => w.trim().length > 0);
-    const positiveWords = words.filter(w => !w.startsWith('-')).map(w => w.replace(/^\\+/, ''));
-    const negativeWords = words.filter(w => w.startsWith('-')).map(w => w.substring(1));
-    const searchQuery = positiveWords.join(' ');
 
-    const searchUrl = `https://www.rebel.pl/szukaj?q=${encodeURIComponent(searchQuery)}`;
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    
-    await page.waitForSelector(SELECTORS.availability.searchResults, { timeout: 10000 }).catch(() => {});
-    
-    const items = await page.locator(SELECTORS.availability.searchItems).all();
-    log(`Analiza elementów w wynikach wyszukiwania...`);
-
-    for (const item of items) {
-      try {
-        const text = await item.innerText();
-        const lowerText = text.toLowerCase();
-        
-        let match = true;
-        for (const pw of positiveWords) {
-          if (!lowerText.includes(pw.toLowerCase())) { match = false; break; }
-        }
-        if (!match) continue;
-        
-        for (const nw of negativeWords) {
-          if (lowerText.includes(nw.toLowerCase())) { match = false; break; }
-        }
-        if (!match) continue;
-
-        log(`Znaleziono potencjalnie pasujący produkt: ${text.split('\\n')[0]}`);
-        
-        // Czasami wyszukiwarka podaje listę a href z title, zbadajmy link
-        let href = null;
-        if (await item.evaluate(el => el.tagName.toLowerCase()) === 'a') {
-            href = await item.getAttribute('href');
-        } else {
-            href = await item.locator('a').first().getAttribute('href').catch(() => null);
-        }
-
-        if (!href || href.includes('/cart') || href.includes('/checkout')) continue;
-        
-        const resolvedUrl = href.startsWith('http') ? href : new URL(href, 'https://www.rebel.pl').toString();
-        
-        // Zamiast sprawdzać DOM listy produktów (który w Rebelu bywa złożony), 
-        // można przejść na jego stronę i tam sprawdzić dostępność przez logikę oryginalną
-        return await checkAvailability(page, resolvedUrl, log);
-
-      } catch (e) {}
+    const resolvedUrl = await findProductUrlBySearch(page, inputUrl, log);
+    if (!resolvedUrl) {
+      log('Brak produktów pasujących do słów kluczowych.');
+      return { available: false, resolvedUrl: null };
     }
-    log('Brak produktów pasujących do słów kluczowych (lub wszystkie niedostępne).');
-    return { available: false, resolvedUrl: null };
+
+    return await checkAvailability(page, resolvedUrl, log);
   }
 
   let resolvedUrl = inputUrl;

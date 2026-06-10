@@ -61,11 +61,13 @@ module.exports = {
     ],
     outOfStockPhrases: ['Produkt tymczasowo niedostępny', 'Chwilowy brak towaru'],
     price: '.price, .product-price, [itemprop="price"]',
-    searchResults: '.product-box, .product, a[href$=".html"]',
-    searchItems: '.product-box, main a[href$=".html"]'
+    searchResults: '#search-results .js-product, #search-results .product',
+    searchItems: '#search-results .js-product, #search-results .product',
+    searchEmpty: '#no-results:not(.d-none), #search-results .search--no-items, .search--no-items'
   },
 
   search: {
-    mainLinks: 'main a[href$=".html"]'
+    mainLinks: '#search-results a[href$=".html"]',
+    productCards: '#search-results .js-product, #search-results .product'
   }
 };

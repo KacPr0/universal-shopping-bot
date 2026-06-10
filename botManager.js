@@ -9,6 +9,9 @@ const BrowserCluster = require('./lib/browserCluster');
 const ConcurrencyQueue = require('./lib/concurrencyQueue');
 const retryWithBackoff = require('./lib/retryWithBackoff');
 const { getDbPath, getSessionsDir, getCheckoutErrorsDir, getDataDir } = require('./lib/paths');
+const { ensurePlaywrightBrowsersPath } = require('./lib/playwrightInstall');
+
+ensurePlaywrightBrowsersPath();
 
 const STAGGER_MAX_MS = 30_000;
 const CHECK_RETRY_ATTEMPTS = 3;

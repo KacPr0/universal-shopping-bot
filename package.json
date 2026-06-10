@@ -1,6 +1,6 @@
 {
   "name": "universal-shopping-bot",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "A universal browser automation shopping bot with web dashboard",
   "main": "main.js",
   "type": "commonjs",

@@ -1,7 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const path = require('path');
-const { exec } = require('child_process');
-const fs = require('fs');
+const { ensurePlaywrightChromium } = require('./lib/playwrightInstall');
+const { getLogsDir } = require('./lib/paths');
 
 // Flag indicate running inside Electron context
 process.env.IS_ELECTRON = 'true';
@@ -72,70 +72,57 @@ function createMainWindow() {
   });
 }
 
-// Funkcja weryfikująca i instalująca przeglądarkę Playwright (Chromium)
+function sendLoadingStatus(payload) {
+  if (loadingWindow) {
+    loadingWindow.webContents.send('status-update', payload);
+  }
+}
+
 async function verifyAndInstallPlaywright() {
-  return new Promise((resolve) => {
-    // Sprawdzamy instalację poprzez próbę uruchomienia Chromium headless przy użyciu playwright
-    const { chromium } = require('playwright-extra');
-    
-    console.log('Weryfikacja instalacji Chromium...');
-    chromium.launch({ headless: true })
-      .then((browser) => {
-        browser.close().then(() => {
-          console.log('Chromium jest zainstalowane i działa poprawnie.');
-          resolve(true);
-        });
-      })
-      .catch((err) => {
-        console.log('Wykryto brak przeglądarki Playwright lub błąd uruchomienia:', err.message);
-        
-        // Aktualizacja statusu na ekranie ładowania
-        if (loadingWindow) {
-          loadingWindow.webContents.send('status-update', {
-            title: 'Instalacja zależności...',
-            status: 'Pobieranie Chromium',
-            details: 'Trwa pobieranie oficjalnej kompilacji Chromium dla Playwright (ok. 150MB). Może to potrwać dłuższą chwilę...'
-          });
-        }
-
-        // Uruchomienie npx playwright install chromium
-        console.log('Uruchamianie npx playwright install chromium...');
-        const installProcess = exec('npx playwright install chromium');
-
-        installProcess.stdout.on('data', (data) => {
-          console.log(`[Playwright Install STDOUT]: ${data}`);
-        });
-
-        installProcess.stderr.on('data', (data) => {
-          console.error(`[Playwright Install STDERR]: ${data}`);
-        });
-
-        installProcess.on('close', (code) => {
-          console.log(`Instalator Playwright zakończył pracę z kodem: ${code}`);
-          if (code === 0) {
-            if (loadingWindow) {
-              loadingWindow.webContents.send('status-update', {
-                title: 'Zakończono pobieranie',
-                status: 'Instalowanie przeglądarki',
-                details: 'Przeglądarka została zainstalowana. Trwa uruchamianie aplikacji...',
-                done: true
-              });
-            }
-            setTimeout(() => resolve(true), 1500);
-          } else {
-            if (loadingWindow) {
-              loadingWindow.webContents.send('status-update', {
-                title: 'Błąd instalacji',
-                status: 'Błąd Playwright',
-                details: `Instalator zakończył pracę z błędem (kod: ${code}). Spróbuj uruchomić aplikację ponownie.`
-              });
-            }
-            // Mimo błędu próbujemy przejść dalej (może błąd był niekrytyczny)
-            setTimeout(() => resolve(false), 3000);
-          }
-        });
-      });
+  sendLoadingStatus({
+    title: 'Inicjalizacja Bota...',
+    status: 'Sprawdzanie Chromium',
+    details: 'Weryfikacja przeglądarki Playwright...'
   });
+
+  const log = (msg) => {
+    console.log(msg);
+    if (loadingWindow && msg.includes('[Playwright]')) {
+      const short = msg.replace(/^\[Playwright\]\s*/, '');
+      sendLoadingStatus({
+        title: 'Instalacja zależności...',
+        status: 'Pobieranie Chromium',
+        details: short
+      });
+    }
+  };
+
+  sendLoadingStatus({
+    title: 'Instalacja zależności...',
+    status: 'Pobieranie Chromium',
+    details: 'Pierwsze uruchomienie: pobieranie Chromium (~260 MB). Wymagany internet — może potrwać kilka minut.'
+  });
+
+  const ok = await ensurePlaywrightChromium(log);
+
+  if (ok) {
+    sendLoadingStatus({
+      title: 'Zakończono pobieranie',
+      status: 'Gotowe',
+      details: 'Przeglądarka gotowa. Uruchamianie aplikacji...',
+      done: true
+    });
+    return true;
+  }
+
+  sendLoadingStatus({
+    title: 'Błąd instalacji',
+    status: 'Błąd Playwright',
+    details:
+      'Nie udało się pobrać Chromium. Sprawdź internet, wyłącz antywirus na chwilę i uruchom aplikację ponownie. ' +
+      'Log: %APPDATA%\\Universal Shopping Bot\\logs\\playwright-install.log'
+  });
+  return false;
 }
 
 function startExpressServer() {
@@ -159,19 +146,19 @@ function startExpressServer() {
 
 app.on('ready', async () => {
   process.env.BOT_DATA_DIR = app.getPath('userData');
+  getLogsDir();
 
   createLoadingWindow();
   
   // Dajmy oknu ładowania 1s na wyrenderowanie HTML
   await new Promise(r => setTimeout(r, 1000));
   
-  // Weryfikacja i ew. instalacja Chromium
-  await verifyAndInstallPlaywright();
-  
-  // Uruchomienie backendu Express
+  const playwrightOk = await verifyAndInstallPlaywright();
+  if (!playwrightOk) {
+    return;
+  }
+
   await startExpressServer();
-  
-  // Otwarcie głównego okna z konsolą bota
   createMainWindow();
 });
 
